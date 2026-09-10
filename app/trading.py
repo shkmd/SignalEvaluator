@@ -28,10 +28,10 @@ def get_live_price(resolved_symbol: str, instrument: str, strike: float) -> dict
         return {"available": False, "reason": f"Price fetch failed: {e}"}
 
 
-def auto_trade_check(signal_id: int, signal: dict, evaluation: dict) -> dict | None:
+def auto_trade_check(user_id: int, signal_id: int, signal: dict, evaluation: dict) -> dict | None:
     """Called right after every evaluation (manual or Telegram-auto). Places a paper (or,
-    once wired, live) order if auto-trade is enabled and the signal clears the bar."""
-    settings = db.get_auto_trade_settings()
+    once wired, live) order if this user's auto-trade is enabled and the signal clears the bar."""
+    settings = db.get_auto_trade_settings(user_id)
     if not settings["enabled"]:
         return None
     if evaluation["score"] < settings["min_score"]:
@@ -42,15 +42,15 @@ def auto_trade_check(signal_id: int, signal: dict, evaluation: dict) -> dict | N
         return None
 
     mode = settings["mode"]
-    if db.count_open_positions(mode=mode) >= settings["max_open_positions"]:
+    if db.count_open_positions(user_id, mode=mode) >= settings["max_open_positions"]:
         return {"placed": False, "reason": "Max open positions reached."}
 
     if mode == "live":
-        return place_live_order(signal_id, signal, evaluation, settings)
-    return place_paper_order(signal_id, signal, evaluation, settings)
+        return place_live_order(user_id, signal_id, signal, evaluation, settings)
+    return place_paper_order(user_id, signal_id, signal, evaluation, settings)
 
 
-def place_paper_order(signal_id: int, signal: dict, evaluation: dict, settings: dict) -> dict:
+def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: dict, settings: dict) -> dict:
     resolved_symbol = signal["resolved_symbol"]
     instrument = signal.get("instrument", "EQ")
     strike = signal.get("strike")
@@ -61,6 +61,7 @@ def place_paper_order(signal_id: int, signal: dict, evaluation: dict, settings: 
 
     targets = signal.get("targets") or []
     order_id = db.insert_order(
+        user_id,
         {
             "signal_id": signal_id,
             "mode": "paper",
@@ -74,13 +75,13 @@ def place_paper_order(signal_id: int, signal: dict, evaluation: dict, settings: 
             "sl": signal.get("sl"),
             "target": min(targets) if targets and side == "buy" else (max(targets) if targets else None),
             "broker": None,
-        }
+        },
     )
     return {"placed": True, "order_id": order_id, "mode": "paper", "entry_price": entry_price}
 
 
-def place_live_order(signal_id: int, signal: dict, evaluation: dict, settings: dict) -> dict:
-    accounts = [a for a in db.list_broker_accounts() if a["connected"]]
+def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dict, settings: dict) -> dict:
+    accounts = [a for a in db.list_broker_accounts(user_id) if a["connected"]]
     if not accounts:
         return {"placed": False, "reason": "No broker connected -- connect one in Broker Setup first."}
     # No broker adapter is wired up yet -- refuse rather than silently no-op or fake a fill.
@@ -92,9 +93,8 @@ def place_live_order(signal_id: int, signal: dict, evaluation: dict, settings: d
     }
 
 
-def close_paper_order(order_id: int, reason: str = "manual_close") -> dict:
-    orders = db.list_orders()
-    order = next((o for o in orders if o["id"] == order_id), None)
+def close_paper_order(user_id: int, order_id: int, reason: str = "manual_close") -> dict:
+    order = db.get_order(user_id, order_id)
     if not order or order["status"] != "open":
         return {"closed": False, "reason": "Order not found or already closed."}
 
@@ -114,10 +114,10 @@ def _calc_pnl(order: dict, exit_price: float) -> float:
 
 
 def monitor_open_positions() -> list:
-    """Checks every open paper position against its SL/target using a live price.
-    Meant to be called periodically by a background task."""
+    """Checks every open paper position (across all users) against its SL/target using a
+    live price. Meant to be called periodically by a background task."""
     closed = []
-    for order in db.list_orders(status="open", mode="paper"):
+    for order in db.list_all_open_orders(mode="paper"):
         price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"])
         if not price_info["available"]:
             continue

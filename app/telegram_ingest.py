@@ -1,7 +1,6 @@
-"""Background Telegram listener: watches your selected channels, parses each message as a
-potential signal, and -- if it looks like a real call (has a symbol plus an SL or targets) --
-runs it through the same evaluation pipeline as the manual "Evaluate" tab and logs it to
-history automatically."""
+"""Per-user background Telegram listeners: each user with an authorized Telegram session
+gets their own watcher, tied to their own enabled channels and their own signal/order data.
+One user's listener failing or being unconfigured never affects another user's."""
 import asyncio
 
 from telethon import events
@@ -11,40 +10,51 @@ from app import parser as signal_parser
 from app import technicals, options as options_mod, news as news_mod
 from app.telegram_client import get_client
 
-_handler_registered = False
+_handler_registered_users: set[int] = set()
 
 
-async def start_listener():
-    client = get_client()
+async def start_listener(user_id: int) -> bool:
+    client = get_client(user_id)
     if not client.is_connected():
         await client.connect()
 
     if not await client.is_user_authorized():
-        print("[telegram] Not logged in yet -- run `scripts/telegram_login.py` once, then restart the app.")
+        print(f"[telegram] user {user_id}: not logged in yet.")
         return False
 
-    global _handler_registered
-    if not _handler_registered:
-        client.add_event_handler(_on_new_message, events.NewMessage(incoming=True))
-        _handler_registered = True
+    if user_id not in _handler_registered_users:
+        client.add_event_handler(
+            lambda event, uid=user_id: _on_new_message(event, uid), events.NewMessage(incoming=True)
+        )
+        _handler_registered_users.add(user_id)
 
-    print("[telegram] Listener active -- watching enabled channels for signals.")
+    print(f"[telegram] user {user_id}: listener active.")
     return True
 
 
-async def stop_listener():
-    client = get_client()
+async def stop_listener(user_id: int):
+    client = get_client(user_id)
     if client.is_connected():
         await client.disconnect()
+    _handler_registered_users.discard(user_id)
 
 
-async def get_status() -> dict:
-    from app import config
+async def start_all_known_listeners():
+    """Called once at app startup: reconnects every user who has Telegram credentials on
+    file and is already authorized (has a saved session), so listeners survive a restart."""
+    for user_id in db.list_users_with_telegram_credentials():
+        try:
+            await start_listener(user_id)
+        except Exception as e:
+            print(f"[telegram] user {user_id}: startup reconnect skipped ({e})")
 
-    if not config.telegram_configured():
+
+async def get_status(user_id: int) -> dict:
+    creds = db.get_telegram_credentials(user_id)
+    if not creds or not creds.get("api_id") or not creds.get("api_hash"):
         return {"configured": False, "authorized": False, "listening": False}
 
-    client = get_client()
+    client = get_client(user_id)
     if not client.is_connected():
         try:
             await client.connect()
@@ -52,15 +62,15 @@ async def get_status() -> dict:
             return {"configured": True, "authorized": False, "listening": False}
 
     authorized = await client.is_user_authorized()
-    return {"configured": True, "authorized": authorized, "listening": authorized and _handler_registered}
+    return {"configured": True, "authorized": authorized, "listening": authorized and user_id in _handler_registered_users}
 
 
-async def fetch_dialogs() -> list:
-    client = get_client()
+async def fetch_dialogs(user_id: int) -> list:
+    client = get_client(user_id)
     if not client.is_connected():
         await client.connect()
     if not await client.is_user_authorized():
-        raise RuntimeError("Not logged in -- run scripts/telegram_login.py first.")
+        raise RuntimeError("Not logged in -- log in from the Telegram tab first.")
 
     dialogs = await client.get_dialogs()
     result = []
@@ -80,10 +90,10 @@ def looks_like_signal(parsed: dict) -> bool:
     return bool(parsed.get("symbol")) and (parsed.get("sl") is not None or bool(parsed.get("targets")))
 
 
-async def _on_new_message(event):
+async def _on_new_message(event, user_id: int):
     try:
         chat_id = event.chat_id
-        enabled_ids = await asyncio.to_thread(db.get_enabled_chat_ids)
+        enabled_ids = await asyncio.to_thread(db.get_enabled_chat_ids, user_id)
         if chat_id not in enabled_ids:
             return
 
@@ -95,12 +105,12 @@ async def _on_new_message(event):
         if not looks_like_signal(parsed):
             return
 
-        await asyncio.to_thread(_evaluate_and_store, parsed, chat_id, event.id)
+        await asyncio.to_thread(_evaluate_and_store, user_id, parsed, chat_id, event.id)
     except Exception as e:
-        print(f"[telegram] Error handling message: {e}")
+        print(f"[telegram] user {user_id}: error handling message: {e}")
 
 
-def _evaluate_and_store(parsed: dict, chat_id: int, message_id: int):
+def _evaluate_and_store(user_id: int, parsed: dict, chat_id: int, message_id: int):
     symbol = parsed["symbol"]
     resolved_symbol = (parsed.get("resolved_symbol") or symbol).upper()
     instrument = (parsed.get("instrument") or "EQ").upper()
@@ -129,8 +139,9 @@ def _evaluate_and_store(parsed: dict, chat_id: int, message_id: int):
     evaluation["options"] = opts
     evaluation["news"] = headlines
 
-    channel_title = db.get_channel_title(chat_id) or str(chat_id)
+    channel_title = db.get_channel_title(user_id, chat_id) or str(chat_id)
     signal_id = db.insert_signal(
+        user_id,
         signal,
         evaluation,
         channel_title,
@@ -140,9 +151,9 @@ def _evaluate_and_store(parsed: dict, chat_id: int, message_id: int):
     )
     if signal_id:
         print(
-            f"[telegram] Auto-evaluated signal #{signal_id} from {channel_title}: "
+            f"[telegram] user {user_id}: auto-evaluated signal #{signal_id} from {channel_title}: "
             f"{symbol} -> score {evaluation['score']} ({evaluation['verdict']})"
         )
-        trade_result = trading.auto_trade_check(signal_id, signal, evaluation)
+        trade_result = trading.auto_trade_check(user_id, signal_id, signal, evaluation)
         if trade_result and trade_result.get("placed"):
-            print(f"[trading] Paper order #{trade_result['order_id']} placed for signal #{signal_id}")
+            print(f"[trading] user {user_id}: paper order #{trade_result['order_id']} placed for signal #{signal_id}")

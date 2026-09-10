@@ -1,14 +1,15 @@
 import asyncio
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
-from app import telegram_ingest, telegram_auth, config, market, trading
+from app import telegram_ingest, telegram_auth, market, trading, auth
 from app.telegram_client import reset_client
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -33,7 +34,7 @@ async def _startup():
     global _monitor_task
     db.init_db()
     try:
-        await telegram_ingest.start_listener()
+        await telegram_ingest.start_all_known_listeners()
     except Exception as e:
         print(f"[telegram] Startup skipped: {e}")
     _monitor_task = asyncio.create_task(_position_monitor_loop())
@@ -43,10 +44,73 @@ async def _startup():
 async def _shutdown():
     if _monitor_task:
         _monitor_task.cancel()
-    try:
-        await telegram_ingest.stop_listener()
-    except Exception:
-        pass
+
+
+def current_user_id(user: dict = Depends(auth.require_user)) -> int:
+    return user["id"]
+
+
+# ---- Auth ----
+
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+def _set_session_cookie(response: Response, token: str):
+    response.set_cookie(
+        auth.SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=auth.SESSION_DAYS * 86400
+    )
+
+
+@app.post("/api/auth/signup")
+def signup(req: SignupRequest, response: Response):
+    if db.get_user_by_email(req.email):
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
+    if len(req.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+
+    password_hash = auth.hash_password(req.password)
+    verification_token = secrets.token_urlsafe(24)
+    user_id = db.create_user(req.email, password_hash, verification_token)
+
+    token, _ = auth.create_session_for_user(user_id)
+    _set_session_cookie(response, token)
+
+    return {
+        "user": {"id": user_id, "email": req.email, "email_verified": False},
+        "note": "Email verification isn't wired up to a mail provider yet -- your account works immediately.",
+    }
+
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest, response: Response):
+    user = db.get_user_by_email(req.email)
+    if not user or not auth.verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    token, _ = auth.create_session_for_user(user["id"])
+    _set_session_cookie(response, token)
+    return {"user": {"id": user["id"], "email": user["email"], "email_verified": bool(user["email_verified"])}}
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response):
+    token = request.cookies.get(auth.SESSION_COOKIE)
+    if token:
+        db.delete_session(token)
+    response.delete_cookie(auth.SESSION_COOKIE)
+    return {"ok": True}
+
+
+@app.get("/api/me")
+def me(user: dict = Depends(auth.require_user)):
+    return {"id": user["id"], "email": user["email"], "email_verified": bool(user["email_verified"])}
 
 
 class ParseRequest(BaseModel):
@@ -79,12 +143,12 @@ def root():
 
 
 @app.post("/api/parse")
-def parse_signal(req: ParseRequest):
+def parse_signal(req: ParseRequest, user_id: int = Depends(current_user_id)):
     return signal_parser.parse_signal(req.raw_text)
 
 
 @app.post("/api/evaluate")
-def evaluate(req: EvaluateRequest):
+def evaluate(req: EvaluateRequest, user_id: int = Depends(current_user_id)):
     symbol = req.symbol.strip().upper()
     resolved_symbol = (req.resolved_symbol or symbol).strip().upper()
     instrument = (req.instrument or "EQ").strip().upper()
@@ -114,39 +178,39 @@ def evaluate(req: EvaluateRequest):
     evaluation["options"] = opts
     evaluation["news"] = headlines
 
-    signal_id = db.insert_signal(signal, evaluation, req.channel or "unknown")
+    signal_id = db.insert_signal(user_id, signal, evaluation, req.channel or "unknown")
     evaluation["signal_id"] = signal_id
-    evaluation["auto_trade"] = trading.auto_trade_check(signal_id, signal, evaluation)
+    evaluation["auto_trade"] = trading.auto_trade_check(user_id, signal_id, signal, evaluation)
 
     return evaluation
 
 
 @app.get("/api/signals")
-def get_signals(channel: Optional[str] = None, outcome: Optional[str] = None):
-    return db.list_signals(channel=channel, outcome=outcome)
+def get_signals(channel: Optional[str] = None, outcome: Optional[str] = None, user_id: int = Depends(current_user_id)):
+    return db.list_signals(user_id, channel=channel, outcome=outcome)
 
 
 @app.get("/api/signals/{signal_id}")
-def get_signal(signal_id: int):
-    s = db.get_signal(signal_id)
+def get_signal(signal_id: int, user_id: int = Depends(current_user_id)):
+    s = db.get_signal(user_id, signal_id)
     if not s:
         raise HTTPException(status_code=404, detail="Signal not found")
     return s
 
 
 @app.post("/api/signals/{signal_id}/outcome")
-def set_outcome(signal_id: int, req: OutcomeRequest):
+def set_outcome(signal_id: int, req: OutcomeRequest, user_id: int = Depends(current_user_id)):
     if req.outcome not in ("pending", "target_hit", "sl_hit", "partial"):
         raise HTTPException(status_code=400, detail="Invalid outcome value")
-    ok = db.update_outcome(signal_id, req.outcome, req.note)
+    ok = db.update_outcome(user_id, signal_id, req.outcome, req.note)
     if not ok:
         raise HTTPException(status_code=404, detail="Signal not found")
     return {"ok": True}
 
 
 @app.get("/api/channels/stats")
-def get_channel_stats():
-    return db.channel_stats()
+def get_channel_stats(user_id: int = Depends(current_user_id)):
+    return db.channel_stats(user_id)
 
 
 @app.get("/api/market/ticker")
@@ -164,30 +228,30 @@ class TelegramConfigRequest(BaseModel):
 
 
 @app.get("/api/telegram/status")
-async def telegram_status():
-    return await telegram_ingest.get_status()
+async def telegram_status(user_id: int = Depends(current_user_id)):
+    return await telegram_ingest.get_status(user_id)
 
 
 @app.post("/api/telegram/config")
-def save_telegram_config(req: TelegramConfigRequest):
+def save_telegram_config(req: TelegramConfigRequest, user_id: int = Depends(current_user_id)):
     api_id = req.api_id.strip()
     api_hash = req.api_hash.strip()
     if not api_id.isdigit():
         raise HTTPException(status_code=400, detail="API ID should be numeric -- check my.telegram.org.")
     if not api_hash:
         raise HTTPException(status_code=400, detail="API Hash is required.")
-    config.save_telegram_credentials(api_id, api_hash)
-    reset_client()
+    db.save_telegram_credentials(user_id, api_id, api_hash)
+    reset_client(user_id)
     return {"ok": True}
 
 
 @app.post("/api/telegram/reconnect")
-async def telegram_reconnect():
+async def telegram_reconnect(user_id: int = Depends(current_user_id)):
     try:
-        await telegram_ingest.start_listener()
+        await telegram_ingest.start_listener(user_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return await telegram_ingest.get_status()
+    return await telegram_ingest.get_status(user_id)
 
 
 class PhoneRequest(BaseModel):
@@ -203,53 +267,53 @@ class PasswordRequest(BaseModel):
 
 
 @app.post("/api/telegram/login/send-code")
-async def telegram_send_code(req: PhoneRequest):
+async def telegram_send_code(req: PhoneRequest, user_id: int = Depends(current_user_id)):
     try:
-        return await telegram_auth.send_code(req.phone.strip())
+        return await telegram_auth.send_code(user_id, req.phone.strip())
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/telegram/login/verify-code")
-async def telegram_verify_code(req: CodeRequest):
+async def telegram_verify_code(req: CodeRequest, user_id: int = Depends(current_user_id)):
     try:
-        result = await telegram_auth.verify_code(req.code.strip())
+        result = await telegram_auth.verify_code(user_id, req.code.strip())
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if result.get("logged_in"):
-        await telegram_ingest.start_listener()
+        await telegram_ingest.start_listener(user_id)
     return result
 
 
 @app.post("/api/telegram/login/verify-password")
-async def telegram_verify_password(req: PasswordRequest):
+async def telegram_verify_password(req: PasswordRequest, user_id: int = Depends(current_user_id)):
     try:
-        result = await telegram_auth.verify_password(req.password)
+        result = await telegram_auth.verify_password(user_id, req.password)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if result.get("logged_in"):
-        await telegram_ingest.start_listener()
+        await telegram_ingest.start_listener(user_id)
     return result
 
 
 @app.post("/api/telegram/sync-channels")
-async def telegram_sync_channels():
+async def telegram_sync_channels(user_id: int = Depends(current_user_id)):
     try:
-        dialogs = await telegram_ingest.fetch_dialogs()
+        dialogs = await telegram_ingest.fetch_dialogs(user_id)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    db.upsert_dialogs(dialogs)
-    return db.list_monitored_channels()
+    db.upsert_dialogs(user_id, dialogs)
+    return db.list_monitored_channels(user_id)
 
 
 @app.get("/api/telegram/channels")
-def telegram_list_channels():
-    return db.list_monitored_channels()
+def telegram_list_channels(user_id: int = Depends(current_user_id)):
+    return db.list_monitored_channels(user_id)
 
 
 @app.post("/api/telegram/channels/{channel_id}/toggle")
-def telegram_toggle_channel(channel_id: int, req: ChannelToggleRequest):
-    ok = db.set_channel_enabled(channel_id, req.enabled)
+def telegram_toggle_channel(channel_id: int, req: ChannelToggleRequest, user_id: int = Depends(current_user_id)):
+    ok = db.set_channel_enabled(user_id, channel_id, req.enabled)
     if not ok:
         raise HTTPException(status_code=404, detail="Channel not found")
     return {"ok": True}
@@ -265,39 +329,42 @@ class AutoTradeSettingsRequest(BaseModel):
 
 
 @app.get("/api/trading/settings")
-def get_trading_settings():
-    return db.get_auto_trade_settings()
+def get_trading_settings(user_id: int = Depends(current_user_id)):
+    return db.get_auto_trade_settings(user_id)
 
 
 @app.post("/api/trading/settings")
-def save_trading_settings(req: AutoTradeSettingsRequest):
+def save_trading_settings(req: AutoTradeSettingsRequest, user_id: int = Depends(current_user_id)):
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if "mode" in updates and updates["mode"] not in ("paper", "live"):
         raise HTTPException(status_code=400, detail="mode must be 'paper' or 'live'")
-    return db.save_auto_trade_settings(updates)
+    return db.save_auto_trade_settings(user_id, updates)
 
 
 @app.get("/api/trading/positions")
-def get_positions(mode: Optional[str] = None):
-    return db.list_orders(status="open", mode=mode)
+def get_positions(mode: Optional[str] = None, user_id: int = Depends(current_user_id)):
+    return db.list_orders(user_id, status="open", mode=mode)
 
 
 @app.get("/api/trading/orders")
-def get_orders(mode: Optional[str] = None, status: Optional[str] = None):
-    return db.list_orders(status=status, mode=mode)
+def get_orders(mode: Optional[str] = None, status: Optional[str] = None, user_id: int = Depends(current_user_id)):
+    return db.list_orders(user_id, status=status, mode=mode)
 
 
 @app.post("/api/trading/orders/{order_id}/close")
-def close_order(order_id: int):
-    result = trading.close_paper_order(order_id)
+def close_order(order_id: int, user_id: int = Depends(current_user_id)):
+    result = trading.close_paper_order(user_id, order_id)
     if not result.get("closed"):
         raise HTTPException(status_code=400, detail=result.get("reason", "Could not close order"))
     return result
 
 
 @app.get("/api/trading/pnl-summary")
-def get_pnl_summary(mode: str = "paper"):
-    return {"realized_today": db.daily_realized_pnl(mode=mode), "open_positions": db.count_open_positions(mode=mode)}
+def get_pnl_summary(mode: str = "paper", user_id: int = Depends(current_user_id)):
+    return {
+        "realized_today": db.daily_realized_pnl(user_id, mode=mode),
+        "open_positions": db.count_open_positions(user_id, mode=mode),
+    }
 
 
 class BrokerConnectRequest(BaseModel):
@@ -306,22 +373,22 @@ class BrokerConnectRequest(BaseModel):
 
 
 @app.get("/api/broker/accounts")
-def get_broker_accounts():
-    return db.list_broker_accounts()
+def get_broker_accounts(user_id: int = Depends(current_user_id)):
+    return db.list_broker_accounts(user_id)
 
 
 @app.post("/api/broker/connect")
-def connect_broker(req: BrokerConnectRequest):
+def connect_broker(req: BrokerConnectRequest, user_id: int = Depends(current_user_id)):
     # No order-placement adapter exists for any broker yet -- this only stores credentials
     # so the account shows as "connected" for setup purposes. Live orders are still refused
     # in trading.place_live_order() until a real adapter is wired up for this broker.
-    db.upsert_broker_account(req.broker, req.credentials, connected=True)
+    db.upsert_broker_account(user_id, req.broker, req.credentials, connected=True)
     return {"ok": True}
 
 
 @app.post("/api/broker/{broker}/disconnect")
-def disconnect_broker(broker: str):
-    ok = db.disconnect_broker_account(broker)
+def disconnect_broker(broker: str, user_id: int = Depends(current_user_id)):
+    ok = db.disconnect_broker_account(user_id, broker)
     if not ok:
         raise HTTPException(status_code=404, detail="Broker account not found")
     return {"ok": True}

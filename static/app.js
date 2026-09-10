@@ -1,5 +1,89 @@
 const $ = (id) => document.getElementById(id);
 
+// ---- Auth ----
+function showAuthGate() {
+  $("auth-gate").classList.remove("hidden");
+  $("app-shell").classList.add("hidden");
+}
+
+function showApp(user) {
+  $("auth-gate").classList.add("hidden");
+  $("app-shell").classList.remove("hidden");
+  $("sidebar-user-email").textContent = user.email;
+  refreshTicker();
+  refreshSidebarConn();
+}
+
+async function checkAuth() {
+  try {
+    const res = await fetch("/api/me");
+    if (res.ok) {
+      showApp(await res.json());
+    } else {
+      showAuthGate();
+    }
+  } catch (e) {
+    showAuthGate();
+  }
+}
+
+$("show-signup").onclick = (e) => {
+  e.preventDefault();
+  $("auth-login-form").classList.add("hidden");
+  $("auth-signup-form").classList.remove("hidden");
+};
+$("show-login").onclick = (e) => {
+  e.preventDefault();
+  $("auth-signup-form").classList.add("hidden");
+  $("auth-login-form").classList.remove("hidden");
+};
+
+$("btn-login").onclick = async () => {
+  const errEl = $("login-form-error");
+  errEl.textContent = "";
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: $("login-email").value.trim(),
+        password: $("login-password-field").value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Login failed");
+    showApp(data.user);
+  } catch (e) {
+    errEl.textContent = e.message;
+  }
+};
+
+$("btn-signup").onclick = async () => {
+  const errEl = $("signup-form-error");
+  errEl.textContent = "";
+  try {
+    const res = await fetch("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: $("signup-email").value.trim(),
+        password: $("signup-password-field").value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Sign up failed");
+    showApp(data.user);
+  } catch (e) {
+    errEl.textContent = e.message;
+  }
+};
+
+$("btn-logout").onclick = async (e) => {
+  e.preventDefault();
+  await fetch("/api/auth/logout", { method: "POST" });
+  showAuthGate();
+};
+
 // ---- Tabs ----
 const tabs = {
   evaluate: { btn: $("tab-evaluate"), view: $("view-evaluate"), title: "Evaluate Signal" },
@@ -92,8 +176,7 @@ async function refreshSidebarConn() {
 }
 setInterval(refreshSidebarConn, 30000);
 
-refreshTicker();
-refreshSidebarConn();
+checkAuth();
 
 // ---- Parse ----
 $("btn-parse").onclick = async () => {

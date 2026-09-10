@@ -7,4 +7,4 @@ requests==2.32.3
 feedparser==6.0.11
 python-multipart==0.0.9
 telethon==1.36.0
-python-dotenv==1.0.1
+email-validator==2.2.0

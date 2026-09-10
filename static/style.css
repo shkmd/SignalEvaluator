@@ -195,6 +195,29 @@ select.outcome-select { font-size: 12px; padding: 4px 6px; }
 
 .disclaimer { color: var(--muted); font-size: 11px; margin-top: 24px; line-height: 1.5; }
 
+.auth-gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+.auth-card {
+  width: 340px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+}
+.auth-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); margin-top: 12px; }
+.auth-card input { width: 100%; margin-top: 2px; }
+.auth-switch { text-align: center; font-size: 12px; color: var(--muted); margin-top: 16px; }
+.auth-switch a { color: var(--blue); text-decoration: none; }
+.auth-switch a:hover { text-decoration: underline; }
+
+.user-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding: 0 6px; }
+.user-email { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .channels-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .channels-subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .close-link { color: var(--muted); font-size: 12px; text-decoration: none; }

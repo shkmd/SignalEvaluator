@@ -44,7 +44,14 @@ def fetch_technicals(symbol: str, direction: str = "bullish") -> dict:
         if df is None or df.empty or len(df) < 30:
             return {"available": False, "reason": f"No/insufficient price history for {ticker}."}
 
+        # yfinance sometimes appends a trailing row for the current session before it's
+        # fully populated (NaN OHLC) -- drop any incomplete rows so indicators never see them.
+        df = df.dropna(subset=["Close", "High", "Low", "Volume"])
+        if len(df) < 30:
+            return {"available": False, "reason": f"No/insufficient price history for {ticker}."}
+
         idx = yf.Ticker(NIFTY_TICKER).history(period="9mo", interval="1d", auto_adjust=True)
+        idx = idx.dropna(subset=["Close"]) if idx is not None and not idx.empty else idx
 
         close = df["Close"]
         volume = df["Volume"]

@@ -7,7 +7,45 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <div class="app-shell">
+  <div class="auth-gate" id="auth-gate">
+    <div class="auth-card">
+      <div class="brand" style="border-bottom:none;margin-bottom:16px;padding-bottom:0">
+        <div class="brand-icon">⚡</div>
+        <div>
+          <div class="brand-name">Signal Evaluator</div>
+          <div class="brand-sub">Pro</div>
+        </div>
+      </div>
+
+      <div id="auth-login-form">
+        <h2 style="margin-top:0">Log in</h2>
+        <label>Email
+          <input id="login-email" type="email" placeholder="you@example.com" />
+        </label>
+        <label>Password
+          <input id="login-password-field" type="password" />
+        </label>
+        <button class="primary" id="btn-login" style="width:100%;margin-top:8px">Log in</button>
+        <div class="warnings" id="login-form-error"></div>
+        <div class="auth-switch">No account? <a href="#" id="show-signup">Sign up</a></div>
+      </div>
+
+      <div id="auth-signup-form" class="hidden">
+        <h2 style="margin-top:0">Create your account</h2>
+        <label>Email
+          <input id="signup-email" type="email" placeholder="you@example.com" />
+        </label>
+        <label>Password
+          <input id="signup-password-field" type="password" placeholder="At least 8 characters" />
+        </label>
+        <button class="primary" id="btn-signup" style="width:100%;margin-top:8px">Sign up</button>
+        <div class="warnings" id="signup-form-error"></div>
+        <div class="auth-switch">Already have an account? <a href="#" id="show-login">Log in</a></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-shell hidden" id="app-shell">
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-icon">⚡</div>
@@ -29,6 +67,10 @@
         <div class="conn-pill" id="sidebar-conn-pill">
           <span class="conn-dot" id="sidebar-conn-dot"></span>
           <span id="sidebar-conn-text">Checking…</span>
+        </div>
+        <div class="user-row">
+          <span id="sidebar-user-email" class="user-email"></span>
+          <a href="#" id="btn-logout" class="close-link">Log out</a>
         </div>
       </div>
     </aside>

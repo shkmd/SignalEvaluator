@@ -6,8 +6,34 @@ from datetime import datetime, timezone
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "signals.db"
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    email_verified INTEGER NOT NULL DEFAULT 0,
+    verification_token TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS telegram_credentials (
+    user_id INTEGER PRIMARY KEY,
+    api_id TEXT,
+    api_hash TEXT,
+    session_name TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS signals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     channel TEXT NOT NULL DEFAULT 'unknown',
     raw_text TEXT,
@@ -30,23 +56,28 @@ CREATE TABLE IF NOT EXISTS signals (
     outcome_updated_at TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
     telegram_chat_id INTEGER,
-    telegram_message_id INTEGER
+    telegram_message_id INTEGER,
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_telegram_msg
-    ON signals(telegram_chat_id, telegram_message_id)
+    ON signals(user_id, telegram_chat_id, telegram_message_id)
     WHERE telegram_chat_id IS NOT NULL AND telegram_message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS monitored_channels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_chat_id INTEGER NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    telegram_chat_id INTEGER NOT NULL,
     title TEXT,
     username TEXT,
     enabled INTEGER NOT NULL DEFAULT 0,
-    last_synced_at TEXT
+    last_synced_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    UNIQUE(user_id, telegram_chat_id)
 );
 
 CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     signal_id INTEGER,
     mode TEXT NOT NULL DEFAULT 'paper',
@@ -66,25 +97,30 @@ CREATE TABLE IF NOT EXISTS orders (
     pnl REAL,
     broker TEXT,
     broker_order_id TEXT,
-    FOREIGN KEY (signal_id) REFERENCES signals(id)
+    FOREIGN KEY (signal_id) REFERENCES signals(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS auto_trade_settings (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
+    user_id INTEGER PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 0,
     mode TEXT NOT NULL DEFAULT 'paper',
     min_score REAL NOT NULL DEFAULT 70,
     quantity REAL NOT NULL DEFAULT 1,
     max_open_positions INTEGER NOT NULL DEFAULT 5,
-    max_daily_loss REAL
+    max_daily_loss REAL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS broker_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    broker TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    broker TEXT NOT NULL,
     credentials_json TEXT,
     connected INTEGER NOT NULL DEFAULT 0,
-    connected_at TEXT
+    connected_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    UNIQUE(user_id, broker)
 );
 """
 
@@ -93,6 +129,7 @@ def _conn():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -105,7 +142,124 @@ def init_db():
         conn.close()
 
 
+# ---- Users / auth ----
+
+def create_user(email: str, password_hash: str, verification_token: str) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO users (email, password_hash, email_verified, verification_token, created_at)
+            VALUES (?, ?, 0, ?, ?)
+            """,
+            (email.lower().strip(), password_hash, verification_token, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_user_by_email(email: str) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_user_by_id(user_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def verify_user_email(user_id: int) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE users SET email_verified = 1, verification_token = NULL WHERE id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def create_session(token: str, user_id: int, expires_at: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (token, user_id, datetime.now(timezone.utc).isoformat(), expires_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_session(token: str) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM sessions WHERE token = ?", (token,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def delete_session(token: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---- Per-user Telegram credentials ----
+
+def get_telegram_credentials(user_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM telegram_credentials WHERE user_id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def save_telegram_credentials(user_id: int, api_id: str, api_hash: str) -> None:
+    conn = _conn()
+    try:
+        session_name = f"user_{user_id}"
+        conn.execute(
+            """
+            INSERT INTO telegram_credentials (user_id, api_id, api_hash, session_name)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET api_id = excluded.api_id, api_hash = excluded.api_hash
+            """,
+            (user_id, api_id, api_hash, session_name),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_users_with_telegram_credentials() -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT user_id FROM telegram_credentials WHERE api_id IS NOT NULL AND api_hash IS NOT NULL"
+        ).fetchall()
+        return [r["user_id"] for r in rows]
+    finally:
+        conn.close()
+
+
+# ---- Signals ----
+
 def insert_signal(
+    user_id: int,
     signal: dict,
     evaluation: dict,
     channel: str,
@@ -118,12 +272,13 @@ def insert_signal(
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO signals
-            (created_at, channel, raw_text, symbol, resolved_symbol, instrument, strike,
+            (user_id, created_at, channel, raw_text, symbol, resolved_symbol, instrument, strike,
              signal_type, entry_low, entry_high, sl, targets, score, verdict, direction,
              red_flags, evaluation_json, outcome, source, telegram_chat_id, telegram_message_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
             """,
             (
+                user_id,
                 datetime.now(timezone.utc).isoformat(),
                 channel or "unknown",
                 signal.get("raw_text"),
@@ -162,11 +317,11 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     return d
 
 
-def list_signals(channel: str = None, outcome: str = None, limit: int = 200) -> list:
+def list_signals(user_id: int, channel: str = None, outcome: str = None, limit: int = 200) -> list:
     conn = _conn()
     try:
-        query = "SELECT * FROM signals WHERE 1=1"
-        params = []
+        query = "SELECT * FROM signals WHERE user_id = ?"
+        params = [user_id]
         if channel:
             query += " AND channel = ?"
             params.append(channel)
@@ -181,21 +336,23 @@ def list_signals(channel: str = None, outcome: str = None, limit: int = 200) -> 
         conn.close()
 
 
-def get_signal(signal_id: int) -> dict:
+def get_signal(user_id: int, signal_id: int) -> dict:
     conn = _conn()
     try:
-        row = conn.execute("SELECT * FROM signals WHERE id = ?", (signal_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM signals WHERE id = ? AND user_id = ?", (signal_id, user_id)
+        ).fetchone()
         return _row_to_dict(row) if row else None
     finally:
         conn.close()
 
 
-def update_outcome(signal_id: int, outcome: str, note: str = None) -> bool:
+def update_outcome(user_id: int, signal_id: int, outcome: str, note: str = None) -> bool:
     conn = _conn()
     try:
         cur = conn.execute(
-            "UPDATE signals SET outcome = ?, outcome_note = ?, outcome_updated_at = ? WHERE id = ?",
-            (outcome, note, datetime.now(timezone.utc).isoformat(), signal_id),
+            "UPDATE signals SET outcome = ?, outcome_note = ?, outcome_updated_at = ? WHERE id = ? AND user_id = ?",
+            (outcome, note, datetime.now(timezone.utc).isoformat(), signal_id, user_id),
         )
         conn.commit()
         return cur.rowcount > 0
@@ -203,7 +360,9 @@ def update_outcome(signal_id: int, outcome: str, note: str = None) -> bool:
         conn.close()
 
 
-def upsert_dialogs(dialogs: list) -> None:
+# ---- Monitored channels ----
+
+def upsert_dialogs(user_id: int, dialogs: list) -> None:
     """dialogs: list of {telegram_chat_id, title, username}. Preserves existing enabled flags."""
     conn = _conn()
     try:
@@ -211,38 +370,40 @@ def upsert_dialogs(dialogs: list) -> None:
         for d in dialogs:
             conn.execute(
                 """
-                INSERT INTO monitored_channels (telegram_chat_id, title, username, enabled, last_synced_at)
-                VALUES (?, ?, ?, 0, ?)
-                ON CONFLICT(telegram_chat_id) DO UPDATE SET
+                INSERT INTO monitored_channels (user_id, telegram_chat_id, title, username, enabled, last_synced_at)
+                VALUES (?, ?, ?, ?, 0, ?)
+                ON CONFLICT(user_id, telegram_chat_id) DO UPDATE SET
                     title = excluded.title,
                     username = excluded.username,
                     last_synced_at = excluded.last_synced_at
                 """,
-                (d["telegram_chat_id"], d.get("title"), d.get("username"), now),
+                (user_id, d["telegram_chat_id"], d.get("title"), d.get("username"), now),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def list_monitored_channels(enabled_only: bool = False) -> list:
+def list_monitored_channels(user_id: int, enabled_only: bool = False) -> list:
     conn = _conn()
     try:
-        query = "SELECT * FROM monitored_channels"
+        query = "SELECT * FROM monitored_channels WHERE user_id = ?"
+        params = [user_id]
         if enabled_only:
-            query += " WHERE enabled = 1"
+            query += " AND enabled = 1"
         query += " ORDER BY title COLLATE NOCASE"
-        rows = conn.execute(query).fetchall()
+        rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def set_channel_enabled(channel_id: int, enabled: bool) -> bool:
+def set_channel_enabled(user_id: int, channel_id: int, enabled: bool) -> bool:
     conn = _conn()
     try:
         cur = conn.execute(
-            "UPDATE monitored_channels SET enabled = ? WHERE id = ?", (1 if enabled else 0, channel_id)
+            "UPDATE monitored_channels SET enabled = ? WHERE id = ? AND user_id = ?",
+            (1 if enabled else 0, channel_id, user_id),
         )
         conn.commit()
         return cur.rowcount > 0
@@ -250,27 +411,29 @@ def set_channel_enabled(channel_id: int, enabled: bool) -> bool:
         conn.close()
 
 
-def get_enabled_chat_ids() -> set:
+def get_enabled_chat_ids(user_id: int) -> set:
     conn = _conn()
     try:
-        rows = conn.execute("SELECT telegram_chat_id FROM monitored_channels WHERE enabled = 1").fetchall()
+        rows = conn.execute(
+            "SELECT telegram_chat_id FROM monitored_channels WHERE enabled = 1 AND user_id = ?", (user_id,)
+        ).fetchall()
         return {r["telegram_chat_id"] for r in rows}
     finally:
         conn.close()
 
 
-def get_channel_title(chat_id: int) -> str:
+def get_channel_title(user_id: int, chat_id: int) -> str:
     conn = _conn()
     try:
         row = conn.execute(
-            "SELECT title FROM monitored_channels WHERE telegram_chat_id = ?", (chat_id,)
+            "SELECT title FROM monitored_channels WHERE telegram_chat_id = ? AND user_id = ?", (chat_id, user_id)
         ).fetchone()
         return row["title"] if row else None
     finally:
         conn.close()
 
 
-def channel_stats() -> list:
+def channel_stats(user_id: int) -> list:
     conn = _conn()
     try:
         rows = conn.execute(
@@ -283,9 +446,11 @@ def channel_stats() -> list:
                    SUM(CASE WHEN outcome = 'pending' THEN 1 ELSE 0 END) AS pending,
                    AVG(score) AS avg_score
             FROM signals
+            WHERE user_id = ?
             GROUP BY channel
             ORDER BY total DESC
-            """
+            """,
+            (user_id,),
         ).fetchall()
         result = []
         for r in rows:
@@ -299,7 +464,7 @@ def channel_stats() -> list:
         conn.close()
 
 
-# ---- Auto-trade settings (single row) ----
+# ---- Auto-trade settings (one row per user) ----
 
 DEFAULT_SETTINGS = {
     "enabled": False,
@@ -311,26 +476,27 @@ DEFAULT_SETTINGS = {
 }
 
 
-def get_auto_trade_settings() -> dict:
+def get_auto_trade_settings(user_id: int) -> dict:
     conn = _conn()
     try:
-        row = conn.execute("SELECT * FROM auto_trade_settings WHERE id = 1").fetchone()
+        row = conn.execute("SELECT * FROM auto_trade_settings WHERE user_id = ?", (user_id,)).fetchone()
         if not row:
             conn.execute(
                 """
-                INSERT INTO auto_trade_settings (id, enabled, mode, min_score, quantity, max_open_positions, max_daily_loss)
-                VALUES (1, 0, 'paper', 70, 1, 5, NULL)
-                """
+                INSERT INTO auto_trade_settings (user_id, enabled, mode, min_score, quantity, max_open_positions, max_daily_loss)
+                VALUES (?, 0, 'paper', 70, 1, 5, NULL)
+                """,
+                (user_id,),
             )
             conn.commit()
-            row = conn.execute("SELECT * FROM auto_trade_settings WHERE id = 1").fetchone()
+            row = conn.execute("SELECT * FROM auto_trade_settings WHERE user_id = ?", (user_id,)).fetchone()
         return dict(row)
     finally:
         conn.close()
 
 
-def save_auto_trade_settings(settings: dict) -> dict:
-    current = get_auto_trade_settings()
+def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
+    current = get_auto_trade_settings(user_id)
     current.update({k: v for k, v in settings.items() if k in DEFAULT_SETTINGS})
     conn = _conn()
     try:
@@ -338,7 +504,7 @@ def save_auto_trade_settings(settings: dict) -> dict:
             """
             UPDATE auto_trade_settings
             SET enabled = ?, mode = ?, min_score = ?, quantity = ?, max_open_positions = ?, max_daily_loss = ?
-            WHERE id = 1
+            WHERE user_id = ?
             """,
             (
                 1 if current["enabled"] else 0,
@@ -347,27 +513,29 @@ def save_auto_trade_settings(settings: dict) -> dict:
                 current["quantity"],
                 current["max_open_positions"],
                 current["max_daily_loss"],
+                user_id,
             ),
         )
         conn.commit()
-        return get_auto_trade_settings()
+        return get_auto_trade_settings(user_id)
     finally:
         conn.close()
 
 
 # ---- Orders / positions ----
 
-def insert_order(order: dict) -> int:
+def insert_order(user_id: int, order: dict) -> int:
     conn = _conn()
     try:
         cur = conn.execute(
             """
             INSERT INTO orders
-            (created_at, signal_id, mode, symbol, resolved_symbol, instrument, strike, side,
+            (user_id, created_at, signal_id, mode, symbol, resolved_symbol, instrument, strike, side,
              quantity, entry_price, sl, target, status, broker)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
             """,
             (
+                user_id,
                 datetime.now(timezone.utc).isoformat(),
                 order.get("signal_id"),
                 order.get("mode", "paper"),
@@ -389,11 +557,11 @@ def insert_order(order: dict) -> int:
         conn.close()
 
 
-def list_orders(status: str = None, mode: str = None, limit: int = 200) -> list:
+def list_orders(user_id: int, status: str = None, mode: str = None, limit: int = 200) -> list:
     conn = _conn()
     try:
-        query = "SELECT * FROM orders WHERE 1=1"
-        params = []
+        query = "SELECT * FROM orders WHERE user_id = ?"
+        params = [user_id]
         if status:
             query += " AND status = ?"
             params.append(status)
@@ -408,11 +576,35 @@ def list_orders(status: str = None, mode: str = None, limit: int = 200) -> list:
         conn.close()
 
 
-def count_open_positions(mode: str = "paper") -> int:
+def get_order(user_id: int, order_id: int) -> dict:
     conn = _conn()
     try:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM orders WHERE status = 'open' AND mode = ?", (mode,)
+            "SELECT * FROM orders WHERE id = ? AND user_id = ?", (order_id, user_id)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_all_open_orders(mode: str = "paper") -> list:
+    """Cross-user: used by the background position monitor, which checks every open
+    paper position regardless of owner."""
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM orders WHERE status = 'open' AND mode = ?", (mode,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_open_positions(user_id: int, mode: str = "paper") -> int:
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM orders WHERE status = 'open' AND mode = ? AND user_id = ?", (mode, user_id)
         ).fetchone()
         return row["n"]
     finally:
@@ -436,13 +628,13 @@ def close_order(order_id: int, exit_price: float, exit_reason: str, pnl: float) 
         conn.close()
 
 
-def daily_realized_pnl(mode: str = "paper") -> float:
+def daily_realized_pnl(user_id: int, mode: str = "paper") -> float:
     conn = _conn()
     try:
         today = datetime.now(timezone.utc).date().isoformat()
         row = conn.execute(
-            "SELECT SUM(pnl) AS total FROM orders WHERE mode = ? AND closed_at LIKE ?",
-            (mode, f"{today}%"),
+            "SELECT SUM(pnl) AS total FROM orders WHERE mode = ? AND user_id = ? AND closed_at LIKE ?",
+            (mode, user_id, f"{today}%"),
         ).fetchone()
         return row["total"] or 0
     finally:
@@ -451,38 +643,42 @@ def daily_realized_pnl(mode: str = "paper") -> float:
 
 # ---- Broker accounts ----
 
-def list_broker_accounts() -> list:
+def list_broker_accounts(user_id: int) -> list:
     conn = _conn()
     try:
-        rows = conn.execute("SELECT id, broker, connected, connected_at FROM broker_accounts").fetchall()
+        rows = conn.execute(
+            "SELECT id, broker, connected, connected_at FROM broker_accounts WHERE user_id = ?", (user_id,)
+        ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def upsert_broker_account(broker: str, credentials: dict, connected: bool = True) -> None:
+def upsert_broker_account(user_id: int, broker: str, credentials: dict, connected: bool = True) -> None:
     conn = _conn()
     try:
         conn.execute(
             """
-            INSERT INTO broker_accounts (broker, credentials_json, connected, connected_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(broker) DO UPDATE SET
+            INSERT INTO broker_accounts (user_id, broker, credentials_json, connected, connected_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, broker) DO UPDATE SET
                 credentials_json = excluded.credentials_json,
                 connected = excluded.connected,
                 connected_at = excluded.connected_at
             """,
-            (broker, json.dumps(credentials), 1 if connected else 0, datetime.now(timezone.utc).isoformat()),
+            (user_id, broker, json.dumps(credentials), 1 if connected else 0, datetime.now(timezone.utc).isoformat()),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def disconnect_broker_account(broker: str) -> bool:
+def disconnect_broker_account(user_id: int, broker: str) -> bool:
     conn = _conn()
     try:
-        cur = conn.execute("UPDATE broker_accounts SET connected = 0 WHERE broker = ?", (broker,))
+        cur = conn.execute(
+            "UPDATE broker_accounts SET connected = 0 WHERE broker = ? AND user_id = ?", (broker, user_id)
+        )
         conn.commit()
         return cur.rowcount > 0
     finally:

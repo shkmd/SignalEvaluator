@@ -1,31 +1,34 @@
-"""Shared Telethon client singleton, reused by the login script and the FastAPI app."""
+"""Per-user Telethon client registry. Each user has their own API ID/Hash and their own
+session file, so each user's Telegram connection is fully independent of every other user's."""
+from pathlib import Path
 from telethon import TelegramClient
-from app import config
 
-DATA_DIR = config.DATA_DIR
+from app import db
+
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-_client = None
+_clients: dict[int, TelegramClient] = {}
 
 
-def get_client() -> TelegramClient:
-    global _client
-    if _client is None:
-        if not config.telegram_configured():
+def get_client(user_id: int) -> TelegramClient:
+    if user_id not in _clients:
+        creds = db.get_telegram_credentials(user_id)
+        if not creds or not creds.get("api_id") or not creds.get("api_hash"):
             raise RuntimeError(
-                "TELEGRAM_API_ID / TELEGRAM_API_HASH are not set. Copy .env.example to .env "
-                "and fill them in from https://my.telegram.org first."
+                "Telegram API credentials not set for this account -- add your API ID/Hash "
+                "in the Telegram tab first."
             )
-        _client = TelegramClient(
-            config.TELEGRAM_SESSION_PATH,
-            int(config.TELEGRAM_API_ID),
-            config.TELEGRAM_API_HASH,
-        )
-    return _client
+        session_name = creds.get("session_name") or f"user_{user_id}"
+        session_path = str(DATA_DIR / session_name)
+        _clients[user_id] = TelegramClient(session_path, int(creds["api_id"]), creds["api_hash"])
+    return _clients[user_id]
 
 
-def reset_client():
-    """Drop the cached client so the next get_client() rebuilds it with fresh
-    credentials -- used after saving new API ID/Hash from the UI."""
-    global _client
-    _client = None
+def reset_client(user_id: int):
+    """Drop the cached client so the next get_client() rebuilds it with fresh credentials."""
+    _clients.pop(user_id, None)
+
+
+def all_client_user_ids() -> list:
+    return list(_clients.keys())
