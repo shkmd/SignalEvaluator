@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Signal Evaluator</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <div>
+          <div class="brand-name">Signal Evaluator</div>
+          <div class="brand-sub">Pro</div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <button id="tab-evaluate" class="nav-item active"><span class="nav-icon">⚡</span>Evaluate</button>
+        <button id="tab-history" class="nav-item"><span class="nav-icon">📜</span>History</button>
+        <button id="tab-stats" class="nav-item"><span class="nav-icon">📊</span>Channel Stats</button>
+        <button id="tab-telegram" class="nav-item"><span class="nav-icon">💬</span>Telegram</button>
+        <button id="tab-positions" class="nav-item"><span class="nav-icon">💼</span>Positions</button>
+        <button id="tab-orderbook" class="nav-item"><span class="nav-icon">📘</span>Order Book</button>
+        <button id="tab-broker" class="nav-item"><span class="nav-icon">🏦</span>Broker Setup</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="conn-pill" id="sidebar-conn-pill">
+          <span class="conn-dot" id="sidebar-conn-dot"></span>
+          <span id="sidebar-conn-text">Checking…</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <div class="ticker-bar" id="ticker-bar">
+        <span style="color:var(--muted)">Loading market data…</span>
+      </div>
+
+      <main>
+        <h1 class="page-title" id="page-title">Evaluate Signal</h1>
+    <!-- EVALUATE TAB -->
+    <section id="view-evaluate">
+      <div class="panel">
+        <h2>1. Paste the signal</h2>
+        <textarea id="raw-text" placeholder="POSITIONAL
+Buy KALYAN 630 CE Around 13-14 Range
+Add more at 11
+SL 08
+Target 16/18/20/24/30+"></textarea>
+        <div class="row">
+          <label style="font-size:12px;color:var(--muted)">Channel name
+            <input id="channel-name" placeholder="e.g. XYZ Options Calls" style="display:block;margin-top:4px;width:260px" />
+          </label>
+          <button class="primary" id="btn-parse">Parse signal</button>
+        </div>
+        <div class="warnings" id="parse-warnings"></div>
+      </div>
+
+      <div class="panel">
+        <h2>2. Confirm the fields</h2>
+        <div class="grid">
+          <label>Symbol (as parsed)
+            <input id="f-symbol" />
+          </label>
+          <label>NSE symbol to fetch (fix if wrong)
+            <input id="f-resolved" />
+          </label>
+          <label>Instrument
+            <select id="f-instrument">
+              <option value="EQ">Equity</option>
+              <option value="CE">Call (CE)</option>
+              <option value="PE">Put (PE)</option>
+            </select>
+          </label>
+          <label>Strike (if option)
+            <input id="f-strike" type="number" step="0.05" />
+          </label>
+          <label>Signal type
+            <select id="f-type">
+              <option value="positional">Positional</option>
+              <option value="intraday">Intraday</option>
+              <option value="btst">BTST</option>
+              <option value="swing">Swing</option>
+              <option value="scalp">Scalp</option>
+            </select>
+          </label>
+          <label>Action
+            <select id="f-action">
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+          </label>
+          <label>Entry low
+            <input id="f-entry-low" type="number" step="0.05" />
+          </label>
+          <label>Entry high
+            <input id="f-entry-high" type="number" step="0.05" />
+          </label>
+          <label>Stop loss
+            <input id="f-sl" type="number" step="0.05" />
+          </label>
+          <label style="grid-column: span 2">Targets (comma separated)
+            <input id="f-targets" placeholder="16, 18, 20, 24, 30" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" id="btn-evaluate">Evaluate signal</button>
+          <span id="eval-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+      </div>
+
+      <div class="panel hidden" id="result-panel">
+        <h2>Evaluation</h2>
+        <div class="score-header">
+          <div class="score-circle" id="score-circle">--</div>
+          <div>
+            <div class="verdict" id="verdict-text"></div>
+            <div class="verdict-sub" id="direction-text"></div>
+          </div>
+        </div>
+
+        <div class="flags" id="flags-container"></div>
+
+        <h2 style="margin-top:20px">Scoring breakdown</h2>
+        <table id="breakdown-table">
+          <thead><tr><th>Factor</th><th>Points</th><th style="width:200px">Bar</th><th>Notes</th></tr></thead>
+          <tbody></tbody>
+        </table>
+
+        <div class="two-col" style="margin-top:20px">
+          <div>
+            <h2>Technicals</h2>
+            <div class="kv" id="tech-kv"></div>
+          </div>
+          <div>
+            <h2>Options (best-effort)</h2>
+            <div class="kv" id="opts-kv"></div>
+          </div>
+        </div>
+
+        <h2 style="margin-top:20px">Risk / Reward</h2>
+        <div class="kv" id="rr-kv"></div>
+
+        <h2 style="margin-top:20px">Recent news</h2>
+        <div id="news-list"></div>
+      </div>
+    </section>
+
+    <!-- HISTORY TAB -->
+    <section id="view-history" class="hidden">
+      <div class="panel">
+        <h2>Signal history</h2>
+        <table id="history-table">
+          <thead>
+            <tr><th>ID</th><th>Src</th><th>Channel</th><th>Symbol</th><th>Type</th><th>Score</th><th>Verdict</th><th>Outcome</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- STATS TAB -->
+    <section id="view-stats" class="hidden">
+      <div class="panel">
+        <h2>Channel track record</h2>
+        <table id="stats-table">
+          <thead>
+            <tr><th>Channel</th><th>Total</th><th>Targets hit</th><th>SL hit</th><th>Partial</th><th>Pending</th><th>Hit rate</th><th>Avg score</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TELEGRAM TAB -->
+    <section id="view-telegram" class="hidden">
+      <div class="panel">
+        <h2>Connection status</h2>
+        <div class="row" id="telegram-status-row">
+          <span id="telegram-status-badge" class="badge neutral">checking…</span>
+          <span id="telegram-status-text" style="color:var(--muted);font-size:13px"></span>
+        </div>
+        <button class="secondary" id="btn-recheck-status" style="margin-top:10px">Recheck status</button>
+      </div>
+
+      <div class="panel" id="telegram-config-panel">
+        <h2>API credentials</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:10px">
+          From <a href="https://my.telegram.org" target="_blank" rel="noopener" style="color:var(--blue)">my.telegram.org</a>
+          &rarr; API Development Tools &rarr; create an app &rarr; copy the <code>api_id</code> and <code>api_hash</code> shown.
+          These stay on this machine, in a local <code>.env</code> file.
+        </div>
+        <div class="grid" style="grid-template-columns: 1fr 1fr">
+          <label>API ID
+            <input id="cfg-api-id" placeholder="e.g. 24738294" inputmode="numeric" />
+          </label>
+          <label>API Hash
+            <input id="cfg-api-hash" type="password" placeholder="32-character hash" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" id="btn-save-telegram-config">Save credentials</button>
+          <span id="config-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+      </div>
+
+      <div class="panel hidden" id="telegram-login-panel">
+        <h2>Log in to Telegram</h2>
+
+        <div id="login-step-phone">
+          <div class="grid" style="grid-template-columns: 1fr">
+            <label>Phone number (with country code)
+              <input id="login-phone" placeholder="+91XXXXXXXXXX" />
+            </label>
+          </div>
+          <div class="row">
+            <button class="primary" id="btn-send-code">Send login code</button>
+          </div>
+        </div>
+
+        <div id="login-step-code" class="hidden">
+          <div class="grid" style="grid-template-columns: 1fr">
+            <label>Code sent to your Telegram app / SMS
+              <input id="login-code" placeholder="12345" inputmode="numeric" />
+            </label>
+          </div>
+          <div class="row">
+            <button class="primary" id="btn-verify-code">Verify code</button>
+            <button class="secondary" id="btn-change-phone">Use a different number</button>
+          </div>
+        </div>
+
+        <div id="login-step-password" class="hidden">
+          <div class="grid" style="grid-template-columns: 1fr">
+            <label>Two-factor password
+              <input id="login-password" type="password" />
+            </label>
+          </div>
+          <div class="row">
+            <button class="primary" id="btn-verify-password">Verify password</button>
+          </div>
+        </div>
+
+        <div class="warnings" id="login-error"></div>
+      </div>
+
+      <div class="panel">
+        <div class="channels-header">
+          <div>
+            <h2 style="margin-bottom:2px">Monitored Channels</h2>
+            <div id="monitored-subtitle" class="channels-subtitle"></div>
+          </div>
+          <button class="primary" id="btn-add-channel">+ Add Channel</button>
+        </div>
+
+        <div id="monitored-list" class="channel-list"></div>
+
+        <div id="browse-channels-panel" class="hidden browse-panel">
+          <div class="channels-header">
+            <h2 style="margin:0" id="browse-heading">Browse Channels</h2>
+            <a href="#" id="btn-close-browse" class="close-link">Close</a>
+          </div>
+          <input id="browse-search" placeholder="Search by name or username…" />
+          <div id="browse-list" class="channel-list browse-scroll"></div>
+        </div>
+
+        <div class="row" style="margin-top:16px">
+          <button class="secondary" id="btn-sync-channels">Sync my channels from Telegram</button>
+          <span id="sync-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- POSITIONS TAB -->
+    <section id="view-positions" class="hidden">
+      <div class="panel">
+        <div class="channels-header">
+          <h2 style="margin:0">Open Positions</h2>
+          <span id="positions-summary" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <table id="positions-table" style="margin-top:14px">
+          <thead>
+            <tr><th>ID</th><th>Mode</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>SL</th><th>Target</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ORDER BOOK TAB -->
+    <section id="view-orderbook" class="hidden">
+      <div class="panel">
+        <h2>Order Book</h2>
+        <table id="orderbook-table" style="margin-top:14px">
+          <thead>
+            <tr><th>ID</th><th>Created</th><th>Mode</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Status</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- BROKER SETUP TAB -->
+    <section id="view-broker" class="hidden">
+      <div class="panel">
+        <h2>Auto-Trade Settings</h2>
+        <div class="grid" style="grid-template-columns: repeat(3, 1fr)">
+          <label>Auto-trade
+            <select id="at-enabled">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+          </label>
+          <label>Mode
+            <select id="at-mode">
+              <option value="paper">Paper (simulated)</option>
+              <option value="live">Live (real money)</option>
+            </select>
+          </label>
+          <label>Min score to trade
+            <input id="at-min-score" type="number" min="0" max="100" step="1" />
+          </label>
+          <label>Quantity per trade
+            <input id="at-quantity" type="number" min="1" step="1" />
+          </label>
+          <label>Max open positions
+            <input id="at-max-positions" type="number" min="1" step="1" />
+          </label>
+          <label>Max daily loss (optional)
+            <input id="at-max-loss" type="number" step="1" placeholder="e.g. 5000" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" id="btn-save-at-settings">Save settings</button>
+          <span id="at-settings-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <div class="warnings" id="at-live-warning"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Connect a broker</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+          Credentials are stored locally on this machine. Connecting a broker here does not yet place
+          real orders -- live order execution needs a broker-specific adapter, built once you've picked one.
+        </div>
+        <div id="broker-list" class="channel-list"></div>
+      </div>
+
+      <div class="panel hidden" id="broker-connect-panel">
+        <h2 id="broker-connect-heading">Connect broker</h2>
+        <div class="grid" style="grid-template-columns: 1fr 1fr">
+          <label>API Key / Client ID
+            <input id="broker-cred-key" />
+          </label>
+          <label>API Secret / Access Token
+            <input id="broker-cred-secret" type="password" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" id="btn-save-broker-cred">Save connection</button>
+          <button class="secondary" id="btn-cancel-broker-cred">Cancel</button>
+        </div>
+      </div>
+    </section>
+
+        <div class="disclaimer">
+          Not financial advice. Technical, news and options data are pulled from free/best-effort public
+          sources (Yahoo Finance, Google News RSS, NSE's unofficial option-chain endpoint) and may be delayed,
+          incomplete, or temporarily unavailable. Always verify against your own chart and broker before trading.
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

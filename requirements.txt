@@ -1,0 +1,10 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+yfinance>=1.7.0
+pandas==2.2.2
+numpy==1.26.4
+requests==2.32.3
+feedparser==6.0.11
+python-multipart==0.0.9
+telethon==1.36.0
+python-dotenv==1.0.1
