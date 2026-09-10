@@ -136,6 +136,23 @@ def _conn():
 def init_db():
     conn = _conn()
     try:
+        # One-time migration: an older single-tenant version of this app used the same
+        # table names without a user_id column. If that schema is detected, the data
+        # predates multi-tenancy and can't be attributed to any account -- reset those
+        # tables so the current (user_id-scoped) schema can be created cleanly.
+        cols = conn.execute("PRAGMA table_info(signals)").fetchall()
+        if cols and not any(c["name"] == "user_id" for c in cols):
+            conn.executescript(
+                """
+                DROP TABLE IF EXISTS signals;
+                DROP TABLE IF EXISTS monitored_channels;
+                DROP TABLE IF EXISTS orders;
+                DROP TABLE IF EXISTS auto_trade_settings;
+                DROP TABLE IF EXISTS broker_accounts;
+                """
+            )
+            conn.commit()
+
         conn.executescript(SCHEMA)
         conn.commit()
     finally:
