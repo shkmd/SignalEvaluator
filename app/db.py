@@ -187,6 +187,7 @@ CREATE INDEX IF NOT EXISTS idx_scanner_results_classification ON scanner_results
 CREATE TABLE IF NOT EXISTS scanner_signal_settings (
     user_id INTEGER PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 0,
+    strike_preference TEXT NOT NULL DEFAULT 'ATM',
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
@@ -237,6 +238,11 @@ def init_db():
         cols = {c["name"] for c in conn.execute("PRAGMA table_info(signals)").fetchall()}
         if "lot_size" not in cols:
             conn.execute("ALTER TABLE signals ADD COLUMN lot_size INTEGER")
+            conn.commit()
+
+        sss_cols = {c["name"] for c in conn.execute("PRAGMA table_info(scanner_signal_settings)").fetchall()}
+        if "strike_preference" not in sss_cols:
+            conn.execute("ALTER TABLE scanner_signal_settings ADD COLUMN strike_preference TEXT NOT NULL DEFAULT 'ATM'")
             conn.commit()
     finally:
         conn.close()
@@ -1087,21 +1093,21 @@ def get_scanner_signal_settings(user_id: int) -> dict:
     try:
         row = conn.execute("SELECT * FROM scanner_signal_settings WHERE user_id = ?", (user_id,)).fetchone()
         if not row:
-            return {"user_id": user_id, "enabled": False}
+            return {"user_id": user_id, "enabled": False, "strike_preference": "ATM"}
         return dict(row)
     finally:
         conn.close()
 
 
-def save_scanner_signal_settings(user_id: int, enabled: bool) -> dict:
+def save_scanner_signal_settings(user_id: int, enabled: bool, strike_preference: str = "ATM") -> dict:
     conn = _conn()
     try:
         conn.execute(
             """
-            INSERT INTO scanner_signal_settings (user_id, enabled) VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled
+            INSERT INTO scanner_signal_settings (user_id, enabled, strike_preference) VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled, strike_preference = excluded.strike_preference
             """,
-            (user_id, 1 if enabled else 0),
+            (user_id, 1 if enabled else 0, strike_preference),
         )
         conn.commit()
         return get_scanner_signal_settings(user_id)

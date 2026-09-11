@@ -97,16 +97,14 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
             "separate contract-selection stage (expiry/strike/liquidity) that isn't built yet.",
         }
 
-    try:
-        from app.brokers import kite as kite_broker
-    except ImportError:
-        return {"placed": False, "reason": "Kite Connect adapter not available."}
+    from app.brokers import get_connected_adapter
 
-    if not kite_broker.has_valid_session(user_id):
+    broker = get_connected_adapter(user_id)
+    if not broker:
         return {
             "placed": False,
-            "reason": "Kite Connect isn't connected or today's session has expired -- "
-            "log in again from Broker Setup.",
+            "reason": "No broker is connected or today's session has expired -- "
+            "log in again from Broker Setup (Kite, Upstox, or Dhan).",
         }
 
     if settings.get("max_daily_loss"):
@@ -122,20 +120,12 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
     quantity = int(settings["quantity"])
 
     try:
-        kite_order_id = kite_broker.place_order(
-            user_id,
-            tradingsymbol=resolved_symbol,
-            exchange="NSE",
-            transaction_type=side,
-            quantity=quantity,
-            product="MIS",
-            order_type="MARKET",
-        )
+        broker_order_id, broker_name = _place_equity_order(broker, user_id, resolved_symbol, side, quantity)
     except Exception as e:
-        return {"placed": False, "reason": f"Kite order placement failed: {e}"}
+        return {"placed": False, "reason": f"{_broker_name(broker)} order placement failed: {e}"}
 
     try:
-        entry_price = kite_broker.fetch_ltp(user_id, resolved_symbol, "NSE")
+        entry_price = broker.fetch_ltp(user_id, resolved_symbol, "NSE")
     except Exception:
         entry_price = signal.get("entry_high") or signal.get("entry_low")
 
@@ -154,11 +144,44 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
             "entry_price": entry_price,
             "sl": signal.get("sl"),
             "target": min(targets) if targets and side == "BUY" else (max(targets) if targets else None),
-            "broker": "zerodha",
-            "broker_order_id": kite_order_id,
+            "broker": broker_name,
+            "broker_order_id": broker_order_id,
         },
     )
-    return {"placed": True, "order_id": order_id, "mode": "live", "entry_price": entry_price, "kite_order_id": kite_order_id}
+    return {"placed": True, "order_id": order_id, "mode": "live", "entry_price": entry_price, "broker_order_id": broker_order_id}
+
+
+def _broker_name(mod) -> str:
+    return mod.__name__.rsplit(".", 1)[-1]
+
+
+def _place_equity_order(broker, user_id: int, resolved_symbol: str, side: str, quantity: int):
+    """Translates this app's generic (symbol, exchange, side, qty) shape into whichever
+    broker-specific order call the connected adapter needs -- each broker's place_order()
+    takes different identifiers (Kite: tradingsymbol; Upstox: instrument_key; Dhan:
+    security_id), so this is the one place that bridges them. Returns (broker_order_id,
+    broker name used for the orders table)."""
+    name = _broker_name(broker)
+    if name == "kite":
+        order_id = broker.place_order(
+            user_id, tradingsymbol=resolved_symbol, exchange="NSE",
+            transaction_type=side, quantity=quantity, product="MIS", order_type="MARKET",
+        )
+        return order_id, "zerodha"
+    if name == "upstox":
+        instrument_key = broker.resolve_instrument_key(resolved_symbol, "NSE")
+        order_id = broker.place_order(
+            user_id, instrument_key, transaction_type=side, quantity=quantity, product="I", order_type="MARKET",
+        )
+        return order_id, "upstox"
+    if name == "dhan":
+        security_id, segment = broker.resolve_security_id(resolved_symbol, "NSE")
+        order_id = broker.place_order(
+            user_id, security_id, segment, transaction_type=side, quantity=quantity,
+            product_type="INTRADAY", order_type="MARKET",
+        )
+        return order_id, "dhan"
+    raise RuntimeError(f"No order-placement wiring for broker '{name}'.")
 
 
 def close_order(user_id: int, order_id: int, reason: str = "manual_close") -> dict:
@@ -180,34 +203,24 @@ def close_order(user_id: int, order_id: int, reason: str = "manual_close") -> di
 
 
 def _close_live_order(user_id: int, order: dict, reason: str) -> dict:
-    try:
-        from app.brokers import kite as kite_broker
-    except ImportError:
-        return {"closed": False, "reason": "Kite Connect adapter not available."}
+    from app.brokers import get_connected_adapter
 
-    if not kite_broker.has_valid_session(user_id):
+    broker = get_connected_adapter(user_id)
+    if not broker:
         return {
             "closed": False,
-            "reason": "Kite Connect session has expired -- log in again from Broker Setup "
-            "before closing this live position (your real position is still open on Zerodha).",
+            "reason": "No broker session is active -- log in again from Broker Setup before "
+            "closing this live position (your real position is still open with your broker).",
         }
 
     offsetting_side = "SELL" if order["side"] == "buy" else "BUY"
     try:
-        kite_broker.place_order(
-            user_id,
-            tradingsymbol=order["resolved_symbol"],
-            exchange="NSE",
-            transaction_type=offsetting_side,
-            quantity=int(order["quantity"]),
-            product="MIS",
-            order_type="MARKET",
-        )
+        _place_equity_order(broker, user_id, order["resolved_symbol"], offsetting_side, int(order["quantity"]))
     except Exception as e:
-        return {"closed": False, "reason": f"Kite offsetting order failed: {e} -- your real position is still open."}
+        return {"closed": False, "reason": f"{_broker_name(broker)} offsetting order failed: {e} -- your real position is still open."}
 
     try:
-        exit_price = kite_broker.fetch_ltp(user_id, order["resolved_symbol"], "NSE")
+        exit_price = broker.fetch_ltp(user_id, order["resolved_symbol"], "NSE")
     except Exception:
         exit_price = order["entry_price"]
 

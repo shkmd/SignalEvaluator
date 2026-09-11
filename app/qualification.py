@@ -53,28 +53,32 @@ def _is_nan(x):
 
 
 def _fetch_daily(symbol: str, ticker: str, user_id: int = None):
-    """Tries the given user's Kite Connect session first; falls back to yfinance on any
-    error or if not connected. Returns (DataFrame, source)."""
+    """Tries the given user's connected broker session first (priority Kite > Upstox > Dhan);
+    falls back to yfinance on any error or if none connected. Returns (DataFrame, source)."""
     if user_id is not None:
         try:
-            from app.brokers import kite as kite_broker
+            from app.brokers import get_connected_adapter
 
-            df = kite_broker.fetch_daily_candles(user_id, symbol.upper(), "NSE", days=400)
-            if df is not None and not df.empty:
-                return df, "kite"
+            adapter = get_connected_adapter(user_id)
+            if adapter:
+                df = adapter.fetch_daily_candles(user_id, symbol.upper(), "NSE", days=400)
+                if df is not None and not df.empty:
+                    return df, adapter.__name__.rsplit(".", 1)[-1]
         except Exception:
             pass
     return yf.Ticker(ticker).history(period="1y", interval="1d", auto_adjust=True), "yfinance"
 
 
 def _fetch_intraday_15m(symbol: str, ticker: str, user_id: int = None, source: str = "yfinance"):
-    if source == "kite" and user_id is not None:
+    if source != "yfinance" and user_id is not None:
         try:
-            from app.brokers import kite as kite_broker
+            from app.brokers import get_connected_adapter
 
-            df = kite_broker.fetch_intraday_candles(user_id, symbol.upper(), "NSE", "15minute", days=5)
-            if df is not None and not df.empty:
-                return df
+            adapter = get_connected_adapter(user_id)
+            if adapter and adapter.__name__.rsplit(".", 1)[-1] == source:
+                df = adapter.fetch_intraday_candles(user_id, symbol.upper(), "NSE", "15minute", days=5)
+                if df is not None and not df.empty:
+                    return df
         except Exception:
             pass
     try:

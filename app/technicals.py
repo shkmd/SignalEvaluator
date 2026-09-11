@@ -7,17 +7,20 @@ NIFTY_TICKER = "^NSEI"
 
 
 def _fetch_daily_frames(symbol: str, ticker: str, user_id: int = None):
-    """Returns (stock_df, nifty_df, source). Tries the given user's Kite Connect session
-    first (real broker data); falls back to yfinance on any error or if not connected --
-    a broken/expired Kite session should degrade evaluation quality, never break it."""
+    """Returns (stock_df, nifty_df, source). Tries the given user's connected broker session
+    first (real data, priority Kite > Upstox > Dhan); falls back to yfinance on any error or
+    if no broker is connected -- a broken/expired broker session should degrade evaluation
+    quality, never break it."""
     if user_id is not None:
         try:
-            from app.brokers import kite as kite_broker
+            from app.brokers import get_connected_adapter
 
-            stock_df = kite_broker.fetch_daily_candles(user_id, symbol.upper(), "NSE", days=280)
-            idx_df = kite_broker.fetch_daily_candles(user_id, "NIFTY 50", "NSE", days=280)
-            if stock_df is not None and not stock_df.empty:
-                return stock_df, idx_df, "kite"
+            adapter = get_connected_adapter(user_id)
+            if adapter:
+                stock_df = adapter.fetch_daily_candles(user_id, symbol.upper(), "NSE", days=280)
+                idx_df = adapter.fetch_daily_candles(user_id, "NIFTY 50", "NSE", days=280)
+                if stock_df is not None and not stock_df.empty:
+                    return stock_df, idx_df, adapter.__name__.rsplit(".", 1)[-1]
         except Exception:
             pass  # fall through to yfinance
 

@@ -40,11 +40,13 @@ def generate_signals_for_scan(scan_run_id: int) -> list:
     return generated
 
 
-def _build_atm_signal(symbol: str, resolved_symbol: str, bullish: bool, current_price: float, user_id: int) -> dict:
-    """Returns a signal dict for the ATM option, or None if no ATM contract data is available
-    from either Kite or NSE."""
+def _build_atm_signal(
+    symbol: str, resolved_symbol: str, bullish: bool, current_price: float, user_id: int, moneyness: str = "ATM"
+) -> dict:
+    """Returns a signal dict for the option at the user's chosen moneyness (ITM/ATM/OTM), or
+    None if no contract data is available from either Kite or NSE."""
     instrument = "CE" if bullish else "PE"
-    atm = options_mod.find_atm_option(resolved_symbol, current_price, instrument, user_id=user_id)
+    atm = options_mod.find_atm_option(resolved_symbol, current_price, instrument, user_id=user_id, moneyness=moneyness)
     if not atm.get("available") or not atm.get("ltp"):
         return None
 
@@ -106,7 +108,8 @@ def _generate_one(user_id: int, result: dict, classification: str) -> int:
     resolved_symbol = result.get("resolved_symbol") or symbol
     direction = "bullish" if bullish else "bearish"
 
-    atm_build = _build_atm_signal(symbol, resolved_symbol, bullish, cd["close"], user_id)
+    strike_preference = db.get_scanner_signal_settings(user_id).get("strike_preference", "ATM")
+    atm_build = _build_atm_signal(symbol, resolved_symbol, bullish, cd["close"], user_id, moneyness=strike_preference)
     if atm_build:
         signal, atm = atm_build
     else:

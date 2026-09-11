@@ -25,6 +25,7 @@ import pandas as pd
 from kiteconnect import KiteConnect
 
 from app import db
+from app.options import pick_strike
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -127,9 +128,10 @@ def resolve_instrument_token(user_id: int, tradingsymbol: str, exchange: str = "
     return int(match.iloc[0]["instrument_token"])
 
 
-def find_atm_option(user_id: int, name: str, current_price: float, instrument: str) -> dict:
-    """Nearest-to-money strike at the nearest upcoming expiry, using Kite's own NFO
-    instrument dump plus a live quote for premium/OI -- more reliable than NSE scraping."""
+def find_atm_option(user_id: int, name: str, current_price: float, instrument: str, moneyness: str = "ATM") -> dict:
+    """Strike at the requested moneyness (ITM/ATM/OTM) for the nearest upcoming expiry, using
+    Kite's own NFO instrument dump plus a live quote for premium/OI -- more reliable than NSE
+    scraping."""
     df = _load_instruments(user_id, "NFO")
     opts = df[(df["name"] == name.upper()) & (df["instrument_type"] == instrument.upper())]
     if opts.empty:
@@ -144,7 +146,8 @@ def find_atm_option(user_id: int, name: str, current_price: float, instrument: s
 
     nearest_expiry = upcoming["expiry_date"].min()
     at_expiry = upcoming[upcoming["expiry_date"] == nearest_expiry]
-    closest = at_expiry.iloc[(at_expiry["strike"] - current_price).abs().argsort().iloc[0]]
+    strike = pick_strike(at_expiry["strike"].tolist(), current_price, instrument, moneyness)
+    closest = at_expiry[at_expiry["strike"] == strike].iloc[0]
 
     tradingsymbol = closest["tradingsymbol"]
     kite = get_client(user_id)

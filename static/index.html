@@ -157,11 +157,20 @@
             <input type="checkbox" id="chk-scanner-signals" style="width:auto" />
             Generate signals into my History when a stock is newly CE/PE Qualified
           </label>
+          <label style="font-size:12px;color:var(--muted)">Strike
+            <select id="sel-strike-preference" style="display:block;margin-top:4px">
+              <option value="ITM">ITM (in the money)</option>
+              <option value="ATM" selected>ATM (at the money)</option>
+              <option value="OTM">OTM (out of the money)</option>
+            </select>
+          </label>
           <span id="scanner-signals-status" style="color:var(--muted);font-size:12px"></span>
         </div>
         <div style="color:var(--muted);font-size:11px;margin-top:6px">
           Uses the underlying's closing price as entry, the day's low/high as stop-loss, and a
           2:1 risk/reward target -- a directional stock signal, not an option-contract pick.
+          When an ATM/ITM/OTM option contract is found instead (see Strike above), the entry/SL/target
+          are based on that contract's premium.
         </div>
       </div>
 
@@ -552,10 +561,64 @@ Target 16/18/20/24/30+"></textarea>
       </div>
 
       <div class="panel">
+        <div class="channels-header">
+          <h2 style="margin:0">Upstox</h2>
+          <span id="upstox-status-badge" class="badge neutral">checking…</span>
+        </div>
+        <div style="color:var(--muted);font-size:12px;margin:8px 0 14px">
+          Powers your signal evaluations, the shared F&amp;O Scanner, and live order placement --
+          same role as Kite above, for accounts on Upstox instead. Upstox's access token expires
+          at 3:30am every day -- you'll need to click "Log in to Upstox" again each trading morning.
+        </div>
+        <div class="grid" style="grid-template-columns: 1fr 1fr">
+          <label>API Key
+            <input id="upstox-api-key" placeholder="from upstox.com/developer/apps" />
+          </label>
+          <label>API Secret
+            <input id="upstox-api-secret" type="password" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="secondary" id="btn-save-upstox-credentials">Save API key/secret</button>
+          <button class="primary" id="btn-upstox-login">Log in to Upstox</button>
+          <span id="upstox-status-text" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <div class="warnings" id="upstox-warning"></div>
+      </div>
+
+      <div class="panel">
+        <div class="channels-header">
+          <h2 style="margin:0">Dhan</h2>
+          <span id="dhan-status-badge" class="badge neutral">checking…</span>
+        </div>
+        <div style="color:var(--muted);font-size:12px;margin:8px 0 14px">
+          Powers your signal evaluations, the shared F&amp;O Scanner, and live order placement --
+          same role as Kite/Upstox above. Dhan has no "log in" button here: generate a Client ID
+          and a 24-hour access token yourself from
+          <a href="https://web.dhan.co" target="_blank" rel="noopener" style="color:var(--blue)">web.dhan.co</a>
+          &rarr; My Profile &rarr; Access DhanHQ APIs, then paste both below. You'll need to
+          re-generate and re-paste a fresh token every 24 hours.
+        </div>
+        <div class="grid" style="grid-template-columns: 1fr 1fr">
+          <label>Client ID
+            <input id="dhan-client-id" placeholder="e.g. 1000000001" />
+          </label>
+          <label>Access Token
+            <input id="dhan-access-token" type="password" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" id="btn-save-dhan-credentials">Save &amp; connect</button>
+          <span id="dhan-status-text" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <div class="warnings" id="dhan-warning"></div>
+      </div>
+
+      <div class="panel">
         <h2>Other brokers</h2>
         <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
           Credentials are stored locally. These don't have a working order-placement adapter yet --
-          only Kite Connect (above) is fully wired up.
+          only Kite, Upstox, and Dhan (above) are fully wired up.
         </div>
         <div id="broker-list" class="channel-list"></div>
       </div>

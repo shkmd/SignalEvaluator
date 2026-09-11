@@ -193,6 +193,16 @@ function handleKiteRedirect() {
       const warnEl = $("kite-warning");
       if (warnEl) warnEl.innerHTML = `<div style="color:${params.has("kite_error") ? "var(--red)" : "var(--green)"}">${message}</div>`;
     }, 300);
+  } else if (params.has("upstox_connected") || params.has("upstox_error")) {
+    const message = params.has("upstox_connected")
+      ? "Upstox: logged in for today."
+      : "Upstox login failed: " + params.get("upstox_error");
+    history.replaceState({}, "", window.location.pathname);
+    setTimeout(() => {
+      showTab("broker");
+      const warnEl = $("upstox-warning");
+      if (warnEl) warnEl.innerHTML = `<div style="color:${params.has("upstox_error") ? "var(--red)" : "var(--green)"}">${message}</div>`;
+    }, 300);
   }
 }
 
@@ -1166,14 +1176,10 @@ async function loadOrderBook() {
 }
 
 // ---- Broker Setup ----
-const BROKERS = [
-  { id: "upstox", name: "Upstox" },
-  { id: "dhan", name: "Dhan" },
-  { id: "angelone", name: "Angel One (SmartAPI)" },
-];
+const BROKERS = [{ id: "angelone", name: "Angel One (SmartAPI)" }];
 
 async function loadBrokerTab() {
-  await Promise.all([loadAutoTradeSettings(), loadBrokerList(), loadKiteStatus()]);
+  await Promise.all([loadAutoTradeSettings(), loadBrokerList(), loadKiteStatus(), loadUpstoxStatus(), loadDhanStatus()]);
 }
 
 async function loadKiteStatus() {
@@ -1234,6 +1240,118 @@ $("btn-kite-login").onclick = async () => {
     if (!res.ok) throw new Error(data.detail || "Could not get login URL");
     window.open(data.url, "_blank");
     warnEl.innerHTML = `<div style="color:var(--muted)">Log in on the Zerodha tab that just opened, then come back here -- it'll redirect and this status will update.</div>`;
+  } catch (e) {
+    warnEl.innerHTML = `<div>⚠ ${e.message}</div>`;
+  }
+};
+
+async function loadUpstoxStatus() {
+  const badge = $("upstox-status-badge");
+  const text = $("upstox-status-text");
+  try {
+    const res = await fetch("/api/broker/upstox/status");
+    const s = await res.json();
+    if (!s.configured) {
+      badge.className = "badge negative";
+      badge.textContent = "not configured";
+      text.textContent = "Enter your API key/secret and save.";
+    } else if (s.logged_in_today) {
+      badge.className = "badge positive";
+      badge.textContent = "logged in today";
+      text.textContent = s.upstox_user_id ? `Connected as ${s.upstox_user_id}.` : "Connected.";
+    } else {
+      badge.className = "badge negative";
+      badge.textContent = "login required";
+      text.textContent = "Click \"Log in to Upstox\" -- today's session hasn't started yet.";
+    }
+  } catch (e) {
+    badge.className = "badge negative";
+    badge.textContent = "error";
+    text.textContent = String(e);
+  }
+}
+
+$("btn-save-upstox-credentials").onclick = async () => {
+  const warnEl = $("upstox-warning");
+  warnEl.innerHTML = "";
+  const api_key = $("upstox-api-key").value.trim();
+  const api_secret = $("upstox-api-secret").value.trim();
+  if (!api_key || !api_secret) {
+    warnEl.innerHTML = `<div>⚠ Both fields are required.</div>`;
+    return;
+  }
+  try {
+    const res = await fetch("/api/broker/upstox/credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key, api_secret }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
+    $("upstox-api-secret").value = "";
+    await loadUpstoxStatus();
+  } catch (e) {
+    warnEl.innerHTML = `<div>⚠ ${e.message}</div>`;
+  }
+};
+
+$("btn-upstox-login").onclick = async () => {
+  const warnEl = $("upstox-warning");
+  warnEl.innerHTML = "";
+  try {
+    const res = await fetch("/api/broker/upstox/login-url");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not get login URL");
+    window.open(data.url, "_blank");
+    warnEl.innerHTML = `<div style="color:var(--muted)">Log in on the Upstox tab that just opened, then come back here -- it'll redirect and this status will update.</div>`;
+  } catch (e) {
+    warnEl.innerHTML = `<div>⚠ ${e.message}</div>`;
+  }
+};
+
+async function loadDhanStatus() {
+  const badge = $("dhan-status-badge");
+  const text = $("dhan-status-text");
+  try {
+    const res = await fetch("/api/broker/dhan/status");
+    const s = await res.json();
+    if (!s.configured) {
+      badge.className = "badge negative";
+      badge.textContent = "not configured";
+      text.textContent = "Paste your Client ID and access token, then save.";
+    } else if (s.logged_in_today) {
+      badge.className = "badge positive";
+      badge.textContent = "connected";
+      text.textContent = s.dhan_client_id ? `Connected as ${s.dhan_client_id}.` : "Connected.";
+    } else {
+      badge.className = "badge negative";
+      badge.textContent = "token expired";
+      text.textContent = "Generate a fresh access token from web.dhan.co and paste it below (24-hour validity).";
+    }
+  } catch (e) {
+    badge.className = "badge negative";
+    badge.textContent = "error";
+    text.textContent = String(e);
+  }
+}
+
+$("btn-save-dhan-credentials").onclick = async () => {
+  const warnEl = $("dhan-warning");
+  warnEl.innerHTML = "";
+  const client_id = $("dhan-client-id").value.trim();
+  const access_token = $("dhan-access-token").value.trim();
+  if (!client_id || !access_token) {
+    warnEl.innerHTML = `<div>⚠ Both fields are required.</div>`;
+    return;
+  }
+  try {
+    const res = await fetch("/api/broker/dhan/credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_id, access_token }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
+    $("dhan-access-token").value = "";
+    await loadDhanStatus();
   } catch (e) {
     warnEl.innerHTML = `<div>⚠ ${e.message}</div>`;
   }
@@ -1350,21 +1468,28 @@ async function loadScannerSignalSettings() {
   const res = await fetch("/api/scanner/signal-settings");
   const s = await res.json();
   $("chk-scanner-signals").checked = !!s.enabled;
+  $("sel-strike-preference").value = s.strike_preference || "ATM";
 }
 
-$("chk-scanner-signals").onchange = async (e) => {
+async function saveScannerSignalSettings(statusText) {
   const statusEl = $("scanner-signals-status");
   try {
     await fetch("/api/scanner/signal-settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: e.target.checked }),
+      body: JSON.stringify({
+        enabled: $("chk-scanner-signals").checked,
+        strike_preference: $("sel-strike-preference").value,
+      }),
     });
-    statusEl.textContent = e.target.checked ? "Enabled." : "Disabled.";
+    statusEl.textContent = statusText;
   } catch (err) {
     statusEl.textContent = "Error: " + err.message;
   }
-};
+}
+
+$("chk-scanner-signals").onchange = (e) => saveScannerSignalSettings(e.target.checked ? "Enabled." : "Disabled.");
+$("sel-strike-preference").onchange = () => saveScannerSignalSettings(`Strike preference: ${$("sel-strike-preference").value}.`);
 
 async function refreshScannerUniverseCount() {
   try {

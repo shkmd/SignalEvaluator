@@ -46,6 +46,28 @@ def _fetch_chain(symbol: str) -> dict:
         session.close()
 
 
+def pick_strike(strikes: list, current_price: float, instrument: str, moneyness: str = "ATM"):
+    """Picks a strike from the available list matching the requested moneyness. ATM = nearest
+    to spot. Moneyness is direction-aware: for calls, ITM strikes sit below spot and OTM sit
+    above; for puts it's reversed. ITM/OTM step exactly one strike off the ATM strike in the
+    sorted list (the next tick, not a fixed rupee/point distance)."""
+    uniq = sorted(set(strikes))
+    if not uniq:
+        return None
+
+    atm_idx = min(range(len(uniq)), key=lambda i: abs(uniq[i] - current_price))
+    moneyness = (moneyness or "ATM").upper()
+    if moneyness == "ATM":
+        idx = atm_idx
+    else:
+        if instrument.upper() == "CE":
+            step = -1 if moneyness == "ITM" else 1
+        else:  # PE
+            step = 1 if moneyness == "ITM" else -1
+        idx = max(0, min(len(uniq) - 1, atm_idx + step))
+    return uniq[idx]
+
+
 def fetch_option_chain_snapshot(symbol: str, strike: float, instrument: str) -> dict:
     if not strike or instrument not in ("CE", "PE"):
         return {"available": False, "reason": "No strike/instrument to look up (equity signal)."}
@@ -77,9 +99,9 @@ def fetch_option_chain_snapshot(symbol: str, strike: float, instrument: str) -> 
     }
 
 
-def find_atm_strike_nse(symbol: str, current_price: float, instrument: str) -> dict:
-    """Nearest-to-money strike at the nearest expiry, plus that leg's live premium/OI, via
-    the same best-effort NSE endpoint. Returns {available, strike, expiry, ltp, oi, ...}."""
+def find_atm_strike_nse(symbol: str, current_price: float, instrument: str, moneyness: str = "ATM") -> dict:
+    """Nearest-to-money (or ITM/OTM-offset) strike at the nearest expiry, plus that leg's live
+    premium/OI, via the same best-effort NSE endpoint. Returns {available, strike, expiry, ltp, oi, ...}."""
     chain = _fetch_chain(symbol)
     if not chain["available"]:
         return chain
@@ -88,7 +110,8 @@ def find_atm_strike_nse(symbol: str, current_price: float, instrument: str) -> d
     if not rows_with_leg:
         return {"available": False, "reason": f"No {instrument} legs found at the nearest expiry."}
 
-    closest = min(rows_with_leg, key=lambda r: abs(r["strikePrice"] - current_price))
+    strike = pick_strike([r["strikePrice"] for r in rows_with_leg], current_price, instrument, moneyness)
+    closest = next(r for r in rows_with_leg if r["strikePrice"] == strike)
     leg = closest.get(instrument.upper()) or closest.get(instrument.lower())
 
     return {
@@ -104,16 +127,19 @@ def find_atm_strike_nse(symbol: str, current_price: float, instrument: str) -> d
     }
 
 
-def find_atm_option(symbol: str, current_price: float, instrument: str, user_id: int = None) -> dict:
-    """Tries the given user's Kite Connect session first (real NFO instrument data); falls
-    back to the NSE scraper on any error or if not connected."""
+def find_atm_option(symbol: str, current_price: float, instrument: str, user_id: int = None, moneyness: str = "ATM") -> dict:
+    """Tries the given user's connected broker session first (real instrument data, in
+    priority order Kite > Upstox > Dhan); falls back to the NSE scraper on any error or if no
+    broker is connected. moneyness is 'ITM', 'ATM', or 'OTM'."""
     if user_id is not None:
         try:
-            from app.brokers import kite as kite_broker
+            from app.brokers import get_connected_adapter
 
-            result = kite_broker.find_atm_option(user_id, symbol, current_price, instrument)
-            if result.get("available"):
-                return result
+            adapter = get_connected_adapter(user_id)
+            if adapter:
+                result = adapter.find_atm_option(user_id, symbol, current_price, instrument, moneyness=moneyness)
+                if result.get("available"):
+                    return result
         except Exception:
             pass
-    return find_atm_strike_nse(symbol, current_price, instrument)
+    return find_atm_strike_nse(symbol, current_price, instrument, moneyness)

@@ -11,7 +11,7 @@ from typing import Optional, List
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
 from app import fo_universe, scanner, telegram_broadcast
-from app.brokers import kite as kite_broker
+from app.brokers import kite as kite_broker, upstox as upstox_broker, dhan as dhan_broker
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from app.telegram_client import reset_client
 
@@ -443,17 +443,30 @@ def refresh_fo_universe(user_id: int = Depends(current_user_id)):
 
     stocks = result["stocks"]
     lot_sizes_added = 0
-    try:
-        if kite_broker.has_valid_session(user_id):
-            kite_rows = {r["symbol"]: r for r in kite_broker.fetch_fo_underlyings(user_id)}
-            for s in stocks:
-                match = kite_rows.get(s["symbol"])
-                if match:
-                    s["lot_size"] = match["lot_size"]
-                    s["expiries"] = match["expiries"]
-                    lot_sizes_added += 1
-    except Exception:
-        pass  # NSE-only universe still works fine without Kite's lot sizes/expiries
+
+    # Kite's instrument dump needs this user's own session; Upstox/Dhan's dumps are public
+    # (no auth needed to download), so they're tried unconditionally as a broader fallback --
+    # whichever source fills in a stock's real lot size/expiries first wins, since it's the
+    # same shared/global F&O universe for every user either way.
+    for fetch in (
+        (lambda: kite_broker.fetch_fo_underlyings(user_id)) if kite_broker.has_valid_session(user_id) else None,
+        upstox_broker.fetch_fo_underlyings,
+        dhan_broker.fetch_fo_underlyings,
+    ):
+        if fetch is None:
+            continue
+        try:
+            rows_by_symbol = {r["symbol"]: r for r in fetch()}
+        except Exception:
+            continue
+        for s in stocks:
+            if s.get("lot_size"):
+                continue
+            match = rows_by_symbol.get(s["symbol"])
+            if match:
+                s["lot_size"] = match["lot_size"]
+                s["expiries"] = match["expiries"]
+                lot_sizes_added += 1
 
     count = db.replace_fo_universe(stocks + result["indices"])
     return {
@@ -461,7 +474,7 @@ def refresh_fo_universe(user_id: int = Depends(current_user_id)):
         "stocks": len(stocks),
         "indices": len(result["indices"]),
         "total_rows": count,
-        "lot_sizes_from_kite": lot_sizes_added,
+        "lot_sizes_added": lot_sizes_added,
     }
 
 
@@ -530,6 +543,7 @@ def export_scanner_csv(
 
 class ScannerSignalSettingsRequest(BaseModel):
     enabled: bool
+    strike_preference: str = "ATM"
 
 
 @app.get("/api/scanner/signal-settings")
@@ -539,7 +553,10 @@ def get_scanner_signal_settings(user_id: int = Depends(current_user_id)):
 
 @app.post("/api/scanner/signal-settings")
 def save_scanner_signal_settings(req: ScannerSignalSettingsRequest, user_id: int = Depends(current_user_id)):
-    return db.save_scanner_signal_settings(user_id, req.enabled)
+    strike_pref = req.strike_preference.upper() if req.strike_preference else "ATM"
+    if strike_pref not in ("ITM", "ATM", "OTM"):
+        raise HTTPException(status_code=400, detail="strike_preference must be ITM, ATM, or OTM")
+    return db.save_scanner_signal_settings(user_id, req.enabled, strike_pref)
 
 
 class KiteCredentialsRequest(BaseModel):
@@ -573,6 +590,59 @@ def kite_callback(request_token: str, user_id: int = Depends(current_user_id)):
 @app.get("/api/broker/kite/status")
 def kite_status(user_id: int = Depends(current_user_id)):
     return kite_broker.get_status(user_id)
+
+
+class UpstoxCredentialsRequest(BaseModel):
+    api_key: str
+    api_secret: str
+
+
+def _upstox_redirect_uri(request: Request) -> str:
+    return str(request.base_url).rstrip("/") + "/api/broker/upstox/callback"
+
+
+@app.post("/api/broker/upstox/credentials")
+def save_upstox_credentials(req: UpstoxCredentialsRequest, user_id: int = Depends(current_user_id)):
+    upstox_broker.save_credentials(user_id, req.api_key.strip(), req.api_secret.strip())
+    return {"ok": True}
+
+
+@app.get("/api/broker/upstox/login-url")
+def upstox_login_url(request: Request, user_id: int = Depends(current_user_id)):
+    try:
+        return {"url": upstox_broker.get_login_url(user_id, _upstox_redirect_uri(request))}
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/broker/upstox/callback")
+def upstox_callback(code: str, request: Request, user_id: int = Depends(current_user_id)):
+    try:
+        upstox_broker.handle_callback(user_id, code, _upstox_redirect_uri(request))
+    except Exception as e:
+        return RedirectResponse(url=f"/?upstox_error={e}")
+    return RedirectResponse(url="/?upstox_connected=1")
+
+
+@app.get("/api/broker/upstox/status")
+def upstox_status(user_id: int = Depends(current_user_id)):
+    return upstox_broker.get_status(user_id)
+
+
+class DhanCredentialsRequest(BaseModel):
+    client_id: str
+    access_token: str
+
+
+@app.post("/api/broker/dhan/credentials")
+def save_dhan_credentials(req: DhanCredentialsRequest, user_id: int = Depends(current_user_id)):
+    dhan_broker.save_credentials(user_id, req.client_id.strip(), req.access_token.strip())
+    return {"ok": True}
+
+
+@app.get("/api/broker/dhan/status")
+def dhan_status(user_id: int = Depends(current_user_id)):
+    return dhan_broker.get_status(user_id)
 
 
 class TelegramBroadcastSettingsRequest(BaseModel):
