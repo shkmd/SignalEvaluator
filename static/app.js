@@ -339,6 +339,7 @@ function renderEvaluation(data, prefix) {
   const t = data.technicals || {};
   $(id("tech-kv")).innerHTML = t.available
     ? `
+    <div><span>Data source</span>${t.source === "kite" ? '<span class="badge positive">Kite</span>' : '<span class="badge neutral">yfinance</span>'}</div>
     <div><span>Last close</span>${t.last_close}</div>
     <div><span>EMA20 / EMA50</span>${t.ema20} / ${t.ema50}</div>
     <div><span>EMA200</span>${t.ema200 ?? "n/a"}</div>
@@ -1327,7 +1328,8 @@ async function openScanDetail(symbol) {
     const res = await fetch(`/api/scanner/results/${symbol}?run_id=${_scannerLatestRunId}`);
     if (!res.ok) throw new Error("Could not load result");
     const r = await res.json();
-    $("scan-modal-title").textContent = `${r.symbol} -- ${r.company_name || ""} (${r.classification})`;
+    const src = r.snapshot && r.snapshot.data_source === "kite" ? " · Kite" : " · yfinance";
+    $("scan-modal-title").textContent = `${r.symbol} -- ${r.company_name || ""} (${r.classification})${src}`;
     $("scan-ce-conditions").innerHTML = renderConditionList(r.ce_conditions);
     $("scan-pe-conditions").innerHTML = renderConditionList(r.pe_conditions);
   } catch (e) {
