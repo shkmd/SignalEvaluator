@@ -86,6 +86,7 @@ $("btn-logout").onclick = async (e) => {
 
 // ---- Tabs ----
 const tabs = {
+  scanner: { btn: $("tab-scanner"), view: $("view-scanner"), title: "F&O Directional Scanner" },
   evaluate: { btn: $("tab-evaluate"), view: $("view-evaluate"), title: "Evaluate Signal" },
   history: { btn: $("tab-history"), view: $("view-history"), title: "Signal History" },
   stats: { btn: $("tab-stats"), view: $("view-stats"), title: "Channel Stats" },
@@ -106,6 +107,7 @@ function showTab(name) {
   if (name === "positions") loadPositions();
   if (name === "orderbook") loadOrderBook();
   if (name === "broker") loadBrokerTab();
+  if (name === "scanner") loadScannerTab();
 }
 Object.entries(tabs).forEach(([name, t]) => (t.btn.onclick = () => showTab(name)));
 
@@ -987,3 +989,204 @@ async function disconnectBroker(brokerId) {
   await fetch(`/api/broker/${brokerId}/disconnect`, { method: "POST" });
   loadBrokerList();
 }
+
+// ---- F&O Scanner ----
+let _scannerFilter = "ALL";
+let _scannerLatestRunId = null;
+
+async function loadScannerTab() {
+  await Promise.all([refreshScannerUniverseCount(), loadLatestScanSummary()]);
+}
+
+async function refreshScannerUniverseCount() {
+  try {
+    const res = await fetch("/api/scanner/universe");
+    const rows = await res.json();
+    $("scanner-universe-count").textContent = `${rows.length} F&O stocks in universe`;
+  } catch (e) {
+    $("scanner-universe-count").textContent = "";
+  }
+}
+
+$("btn-refresh-universe").onclick = async () => {
+  const statusEl = $("scanner-status");
+  statusEl.textContent = "Refreshing universe from NSE…";
+  try {
+    const res = await fetch("/api/scanner/universe/refresh", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Refresh failed");
+    statusEl.textContent = `Universe refreshed: ${data.stocks} stocks, ${data.indices} indices.`;
+    refreshScannerUniverseCount();
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+};
+
+$("btn-run-scan").onclick = async () => {
+  const statusEl = $("scanner-status");
+  const btn = $("btn-run-scan");
+  btn.disabled = true;
+  statusEl.textContent = "Scanning F&O universe… this can take up to a minute.";
+  try {
+    const res = await fetch("/api/scanner/run", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Scan failed");
+    statusEl.textContent =
+      `Scan complete: ${data.stocks_scanned}/${data.stocks_total} scanned -- ` +
+      `${data.ce_qualified} CE, ${data.pe_qualified} PE, ${data.near_ce + data.near_pe} near, ${data.unavailable} unavailable.`;
+    await loadLatestScanSummary();
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+async function loadLatestScanSummary() {
+  try {
+    const res = await fetch("/api/scanner/runs/latest");
+    if (!res.ok) {
+      renderScannerSummary(null);
+      renderScannerResultsTable([]);
+      return;
+    }
+    const run = await res.json();
+    _scannerLatestRunId = run.id;
+    renderScannerSummary(run);
+    await loadScannerResults();
+  } catch (e) {
+    renderScannerSummary(null);
+  }
+}
+
+function renderScannerSummary(run) {
+  const grid = $("scanner-summary-grid");
+  if (!run) {
+    grid.innerHTML = `<div style="color:var(--muted);font-size:13px">No scans yet. Click "Refresh universe" then "Run scan now".</div>`;
+    return;
+  }
+  const nearTotal = run.near_ce_count + run.near_pe_count;
+  const tiles = [
+    ["Total F&O stocks", run.stocks_total],
+    ["Stocks scanned", run.stocks_scanned],
+    ["CE qualified", run.ce_qualified_count],
+    ["PE qualified", run.pe_qualified_count],
+    ["Near qualified", nearTotal],
+    ["Data unavailable", run.unavailable_count],
+    ["Data conflicts", run.conflict_count],
+    ["Latest scan", run.completed_at ? new Date(run.completed_at).toLocaleTimeString("en-IN") : run.status],
+  ];
+  grid.innerHTML = tiles
+    .map(([label, value]) => `<div class="summary-tile"><div class="tile-value">${value}</div><div class="tile-label">${label}</div></div>`)
+    .join("");
+}
+
+document.querySelectorAll(".filter-tab").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll(".filter-tab").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    _scannerFilter = btn.dataset.filter;
+    loadScannerResults();
+  };
+});
+
+async function loadScannerResults() {
+  if (!_scannerLatestRunId) return;
+  let url = `/api/scanner/results?run_id=${_scannerLatestRunId}`;
+  if (_scannerFilter === "NEAR") {
+    // "Near" spans two classifications -- fetch both and merge client-side.
+    const [ceRes, peRes] = await Promise.all([
+      fetch(`${url}&classification=NEAR_CE`),
+      fetch(`${url}&classification=NEAR_PE`),
+    ]);
+    const rows = [...(await ceRes.json()), ...(await peRes.json())];
+    renderScannerResultsTable(rows);
+    return;
+  }
+  if (_scannerFilter !== "ALL") url += `&classification=${_scannerFilter}`;
+  const res = await fetch(url);
+  const rows = await res.json();
+  renderScannerResultsTable(rows);
+}
+
+function dirBadge(classification) {
+  if (classification === "CE_QUALIFIED") return `<span class="dir-badge ce">CE</span>`;
+  if (classification === "PE_QUALIFIED") return `<span class="dir-badge pe">PE</span>`;
+  if (classification === "NEAR_CE") return `<span class="dir-badge near">Near CE</span>`;
+  if (classification === "NEAR_PE") return `<span class="dir-badge near">Near PE</span>`;
+  if (classification === "DATA_UNAVAILABLE") return `<span class="dir-badge unavailable">N/A</span>`;
+  if (classification === "DATA_CONFLICT") return `<span class="dir-badge pe">Conflict</span>`;
+  return `<span class="dir-badge unavailable">--</span>`;
+}
+
+function renderScannerResultsTable(rows) {
+  const tbody = document.querySelector("#scanner-results-table tbody");
+  tbody.innerHTML = "";
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="color:var(--muted)">No results for this filter.</td></tr>`;
+    return;
+  }
+  rows.forEach((r) => {
+    const tr = document.createElement("tr");
+    tr.className = "history-row-clickable";
+    tr.innerHTML = `
+      <td>${dirBadge(r.classification)}</td>
+      <td>${r.symbol}</td>
+      <td>${r.company_name || "-"}</td>
+      <td>${r.sector || "-"}</td>
+      <td>${r.ce_passed_count != null ? r.ce_passed_count + "/" + r.ce_total_count : "-"}</td>
+      <td>${r.pe_passed_count != null ? r.pe_passed_count + "/" + r.pe_total_count : "-"}</td>
+      <td>${r.data_timestamp ? new Date(r.data_timestamp).toLocaleTimeString("en-IN") : "-"}</td>
+      <td>${r.error_reason ? `<span style="color:var(--muted);font-size:11px">${r.error_reason}</span>` : ""}</td>
+    `;
+    tr.onclick = () => openScanDetail(r.symbol);
+    tbody.appendChild(tr);
+  });
+}
+
+async function openScanDetail(symbol) {
+  const modal = $("scan-modal");
+  const backdrop = $("scan-modal-backdrop");
+  modal.classList.remove("hidden");
+  backdrop.classList.remove("hidden");
+  $("scan-ce-conditions").innerHTML = `<div style="color:var(--muted)">Loading…</div>`;
+  $("scan-pe-conditions").innerHTML = "";
+  try {
+    const res = await fetch(`/api/scanner/results/${symbol}?run_id=${_scannerLatestRunId}`);
+    if (!res.ok) throw new Error("Could not load result");
+    const r = await res.json();
+    $("scan-modal-title").textContent = `${r.symbol} -- ${r.company_name || ""} (${r.classification})`;
+    $("scan-ce-conditions").innerHTML = renderConditionList(r.ce_conditions);
+    $("scan-pe-conditions").innerHTML = renderConditionList(r.pe_conditions);
+  } catch (e) {
+    $("scan-ce-conditions").innerHTML = `<div style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+function renderConditionList(conditions) {
+  if (!conditions || conditions.length === 0) return `<div style="color:var(--muted)">No condition data.</div>`;
+  return conditions
+    .map(
+      (c) => `
+      <div class="condition-row ${c.passed ? "pass" : "fail"}">
+        <div class="cond-label">${c.passed ? "✓" : "✕"} ${c.label}${c.provisional ? '<span class="provisional-tag">provisional</span>' : ""}</div>
+        <div class="cond-values">${c.actual_value} ${c.comparison} ${c.required_value}</div>
+      </div>`
+    )
+    .join("");
+}
+
+function closeScanDetail() {
+  $("scan-modal").classList.add("hidden");
+  $("scan-modal-backdrop").classList.add("hidden");
+}
+$("btn-close-scan-detail").onclick = closeScanDetail;
+$("scan-modal-backdrop").onclick = closeScanDetail;
+
+$("btn-export-scan-csv").onclick = (e) => {
+  e.preventDefault();
+  if (!_scannerLatestRunId) return;
+  let url = `/api/scanner/export.csv?run_id=${_scannerLatestRunId}`;
+  if (_scannerFilter !== "ALL" && _scannerFilter !== "NEAR") url += `&classification=${_scannerFilter}`;
+  window.open(url, "_blank");
+};

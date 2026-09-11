@@ -55,6 +55,7 @@
         </div>
       </div>
       <nav class="sidebar-nav">
+        <button id="tab-scanner" class="nav-item"><span class="nav-icon">🔍</span>F&amp;O Scanner</button>
         <button id="tab-evaluate" class="nav-item active"><span class="nav-icon">⚡</span>Evaluate</button>
         <button id="tab-history" class="nav-item"><span class="nav-icon">📜</span>History</button>
         <button id="tab-stats" class="nav-item"><span class="nav-icon">📊</span>Channel Stats</button>
@@ -82,6 +83,45 @@
 
       <main>
         <h1 class="page-title" id="page-title">Evaluate Signal</h1>
+
+    <!-- F&O SCANNER TAB -->
+    <section id="view-scanner" class="hidden">
+      <div class="panel">
+        <div class="channels-header">
+          <h2 style="margin:0">F&amp;O Universe &amp; Scan Controls</h2>
+          <span id="scanner-universe-count" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="secondary" id="btn-refresh-universe">Refresh universe</button>
+          <button class="primary" id="btn-run-scan">Run scan now</button>
+          <span id="scanner-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="summary-grid" id="scanner-summary-grid"></div>
+      </div>
+
+      <div class="panel">
+        <div class="channels-header">
+          <div class="scanner-filter-tabs">
+            <button class="filter-tab active" data-filter="ALL">All</button>
+            <button class="filter-tab" data-filter="CE_QUALIFIED">CE Qualified</button>
+            <button class="filter-tab" data-filter="PE_QUALIFIED">PE Qualified</button>
+            <button class="filter-tab" data-filter="NEAR">Near Qualified</button>
+            <button class="filter-tab" data-filter="DATA_UNAVAILABLE">Unavailable</button>
+          </div>
+          <a href="#" id="btn-export-scan-csv" class="close-link">Export CSV</a>
+        </div>
+        <table id="scanner-results-table" style="margin-top:14px">
+          <thead>
+            <tr><th>Dir</th><th>Symbol</th><th>Company</th><th>Sector</th><th>CE</th><th>PE</th><th>Data time</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- EVALUATE TAB -->
     <section id="view-evaluate">
       <div class="panel">
@@ -430,6 +470,26 @@ Target 16/18/20/24/30+"></textarea>
     </div>
     <pre class="raw-text-box hidden" id="detail-raw-text"></pre>
     <div id="detail-modal-body"></div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="scan-modal-backdrop"></div>
+  <div class="modal hidden" id="scan-modal" style="width:min(920px, 95vw)">
+    <div class="modal-header">
+      <h2 id="scan-modal-title" style="margin:0">Condition breakdown</h2>
+      <button class="icon-btn" id="btn-close-scan-detail" title="Close">✕</button>
+    </div>
+    <div id="scan-modal-body">
+      <div class="two-col">
+        <div>
+          <h2>CE Conditions</h2>
+          <div id="scan-ce-conditions"></div>
+        </div>
+        <div>
+          <h2>PE Conditions</h2>
+          <div id="scan-pe-conditions"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

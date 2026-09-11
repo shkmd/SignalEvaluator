@@ -122,6 +122,66 @@ CREATE TABLE IF NOT EXISTS broker_accounts (
     FOREIGN KEY (user_id) REFERENCES users(id),
     UNIQUE(user_id, broker)
 );
+
+-- ---- F&O Directional Scanner (Phase 1) ----
+-- Shared/global data: the F&O universe and scan results are the same market data for
+-- every user, so (unlike signals/orders/settings above) these tables are NOT user-scoped.
+
+CREATE TABLE IF NOT EXISTS fo_universe (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL UNIQUE,
+    resolved_symbol TEXT NOT NULL,
+    company_name TEXT,
+    sector TEXT,
+    industry TEXT,
+    futures_eligible INTEGER NOT NULL DEFAULT 1,
+    lot_size INTEGER,
+    expiries_json TEXT,
+    is_index INTEGER NOT NULL DEFAULT 0,
+    last_updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scan_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    stocks_total INTEGER NOT NULL DEFAULT 0,
+    stocks_scanned INTEGER NOT NULL DEFAULT 0,
+    ce_qualified_count INTEGER NOT NULL DEFAULT 0,
+    pe_qualified_count INTEGER NOT NULL DEFAULT 0,
+    near_ce_count INTEGER NOT NULL DEFAULT 0,
+    near_pe_count INTEGER NOT NULL DEFAULT 0,
+    not_qualified_count INTEGER NOT NULL DEFAULT 0,
+    unavailable_count INTEGER NOT NULL DEFAULT 0,
+    conflict_count INTEGER NOT NULL DEFAULT 0,
+    triggered_by_user_id INTEGER,
+    rule_version TEXT NOT NULL DEFAULT '1.0'
+);
+
+CREATE TABLE IF NOT EXISTS scanner_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_run_id INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    resolved_symbol TEXT NOT NULL,
+    company_name TEXT,
+    sector TEXT,
+    classification TEXT NOT NULL,
+    ce_conditions_json TEXT,
+    pe_conditions_json TEXT,
+    ce_passed_count INTEGER,
+    ce_total_count INTEGER,
+    pe_passed_count INTEGER,
+    pe_total_count INTEGER,
+    ce_score REAL,
+    pe_score REAL,
+    snapshot_json TEXT,
+    data_timestamp TEXT,
+    error_reason TEXT,
+    FOREIGN KEY (scan_run_id) REFERENCES scan_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_scanner_results_run ON scanner_results(scan_run_id);
+CREATE INDEX IF NOT EXISTS idx_scanner_results_classification ON scanner_results(scan_run_id, classification);
 """
 
 
@@ -698,5 +758,225 @@ def disconnect_broker_account(user_id: int, broker: str) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---- F&O universe ----
+
+def replace_fo_universe(rows: list) -> int:
+    """rows: list of {symbol, resolved_symbol, company_name, sector, industry, lot_size,
+    futures_eligible, expiries, is_index}. Full replace -- the universe is meant to be
+    refreshed wholesale from the data source, not patched incrementally."""
+    conn = _conn()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("DELETE FROM fo_universe")
+        for r in rows:
+            conn.execute(
+                """
+                INSERT INTO fo_universe
+                (symbol, resolved_symbol, company_name, sector, industry, futures_eligible,
+                 lot_size, expiries_json, is_index, last_updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    r["symbol"],
+                    r.get("resolved_symbol", r["symbol"]),
+                    r.get("company_name"),
+                    r.get("sector"),
+                    r.get("industry"),
+                    1 if r.get("futures_eligible", True) else 0,
+                    r.get("lot_size"),
+                    json.dumps(r.get("expiries") or []),
+                    1 if r.get("is_index") else 0,
+                    now,
+                ),
+            )
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def list_fo_universe(include_indices: bool = False) -> list:
+    conn = _conn()
+    try:
+        query = "SELECT * FROM fo_universe"
+        if not include_indices:
+            query += " WHERE is_index = 0"
+        query += " ORDER BY symbol"
+        rows = conn.execute(query).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["expiries"] = json.loads(d.pop("expiries_json") or "[]")
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+def fo_universe_count() -> int:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT COUNT(*) AS n FROM fo_universe WHERE is_index = 0").fetchone()
+        return row["n"]
+    finally:
+        conn.close()
+
+
+# ---- Scan runs / results ----
+
+def create_scan_run(stocks_total: int, triggered_by_user_id: int = None) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO scan_runs (started_at, status, stocks_total, triggered_by_user_id) VALUES (?, 'running', ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), stocks_total, triggered_by_user_id),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def finish_scan_run(scan_run_id: int, counts: dict) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            UPDATE scan_runs SET
+                completed_at = ?, status = 'completed', stocks_scanned = ?,
+                ce_qualified_count = ?, pe_qualified_count = ?, near_ce_count = ?, near_pe_count = ?,
+                not_qualified_count = ?, unavailable_count = ?, conflict_count = ?
+            WHERE id = ?
+            """,
+            (
+                datetime.now(timezone.utc).isoformat(),
+                counts.get("stocks_scanned", 0),
+                counts.get("ce_qualified", 0),
+                counts.get("pe_qualified", 0),
+                counts.get("near_ce", 0),
+                counts.get("near_pe", 0),
+                counts.get("not_qualified", 0),
+                counts.get("unavailable", 0),
+                counts.get("conflict", 0),
+                scan_run_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def fail_scan_run(scan_run_id: int, reason: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE scan_runs SET completed_at = ?, status = 'failed' WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), scan_run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_scan_run(scan_run_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM scan_runs WHERE id = ?", (scan_run_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_latest_scan_run() -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_scan_runs(limit: int = 20) -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def insert_scanner_result(scan_run_id: int, result: dict) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO scanner_results
+            (scan_run_id, symbol, resolved_symbol, company_name, sector, classification,
+             ce_conditions_json, pe_conditions_json, ce_passed_count, ce_total_count,
+             pe_passed_count, pe_total_count, ce_score, pe_score, snapshot_json,
+             data_timestamp, error_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scan_run_id,
+                result["symbol"],
+                result.get("resolved_symbol", result["symbol"]),
+                result.get("company_name"),
+                result.get("sector"),
+                result["classification"],
+                json.dumps(result.get("ce_conditions") or []),
+                json.dumps(result.get("pe_conditions") or []),
+                result.get("ce_passed_count"),
+                result.get("ce_total_count"),
+                result.get("pe_passed_count"),
+                result.get("pe_total_count"),
+                result.get("ce_score"),
+                result.get("pe_score"),
+                json.dumps(result.get("snapshot") or {}),
+                result.get("data_timestamp"),
+                result.get("error_reason"),
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _scanner_result_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["ce_conditions"] = json.loads(d.pop("ce_conditions_json") or "[]")
+    d["pe_conditions"] = json.loads(d.pop("pe_conditions_json") or "[]")
+    d["snapshot"] = json.loads(d.pop("snapshot_json") or "{}")
+    return d
+
+
+def list_scanner_results(scan_run_id: int, classification: str = None, limit: int = 500) -> list:
+    conn = _conn()
+    try:
+        query = "SELECT * FROM scanner_results WHERE scan_run_id = ?"
+        params = [scan_run_id]
+        if classification:
+            query += " AND classification = ?"
+            params.append(classification)
+        query += " ORDER BY id LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        return [_scanner_result_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_scanner_result(scan_run_id: int, symbol: str) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM scanner_results WHERE scan_run_id = ? AND symbol = ?", (scan_run_id, symbol)
+        ).fetchone()
+        return _scanner_result_to_dict(row) if row else None
     finally:
         conn.close()

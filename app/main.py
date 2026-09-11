@@ -10,6 +10,8 @@ from typing import Optional, List
 
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
+from app import fo_universe, scanner
+from fastapi.responses import PlainTextResponse
 from app.telegram_client import reset_client
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -421,6 +423,83 @@ class NoCacheStaticFiles(StaticFiles):
         response = await super().get_response(path, scope)
         response.headers["Cache-Control"] = "no-cache"
         return response
+
+
+@app.get("/api/scanner/universe")
+def get_fo_universe(include_indices: bool = False, user_id: int = Depends(current_user_id)):
+    return db.list_fo_universe(include_indices=include_indices)
+
+
+@app.post("/api/scanner/universe/refresh")
+def refresh_fo_universe(user_id: int = Depends(current_user_id)):
+    result = fo_universe.fetch_fo_universe()
+    if not result["available"]:
+        raise HTTPException(status_code=502, detail=result["reason"])
+    count = db.replace_fo_universe(result["stocks"] + result["indices"])
+    return {"ok": True, "stocks": len(result["stocks"]), "indices": len(result["indices"]), "total_rows": count}
+
+
+@app.post("/api/scanner/run")
+def run_scanner(user_id: int = Depends(current_user_id)):
+    try:
+        return scanner.run_scan(triggered_by_user_id=user_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/scanner/runs")
+def list_scan_runs(limit: int = 20, user_id: int = Depends(current_user_id)):
+    return db.list_scan_runs(limit=limit)
+
+
+@app.get("/api/scanner/runs/latest")
+def get_latest_run(user_id: int = Depends(current_user_id)):
+    run = db.get_latest_scan_run()
+    if not run:
+        raise HTTPException(status_code=404, detail="No scan runs yet -- run a scan first.")
+    return run
+
+
+@app.get("/api/scanner/results")
+def get_scanner_results(
+    run_id: Optional[int] = None, classification: Optional[str] = None, user_id: int = Depends(current_user_id)
+):
+    if run_id is None:
+        latest = db.get_latest_scan_run()
+        if not latest:
+            return []
+        run_id = latest["id"]
+    return db.list_scanner_results(run_id, classification=classification)
+
+
+@app.get("/api/scanner/results/{symbol}")
+def get_scanner_result_detail(symbol: str, run_id: Optional[int] = None, user_id: int = Depends(current_user_id)):
+    if run_id is None:
+        latest = db.get_latest_scan_run()
+        if not latest:
+            raise HTTPException(status_code=404, detail="No scan runs yet.")
+        run_id = latest["id"]
+    result = db.get_scanner_result(run_id, symbol.upper())
+    if not result:
+        raise HTTPException(status_code=404, detail="No result for this symbol in the given run.")
+    return result
+
+
+@app.get("/api/scanner/export.csv")
+def export_scanner_csv(
+    run_id: Optional[int] = None, classification: Optional[str] = None, user_id: int = Depends(current_user_id)
+):
+    if run_id is None:
+        latest = db.get_latest_scan_run()
+        if not latest:
+            raise HTTPException(status_code=404, detail="No scan runs yet.")
+        run_id = latest["id"]
+    csv_text = scanner.export_results_csv(run_id, classification=classification)
+    return PlainTextResponse(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=scan_{run_id}_results.csv"},
+    )
 
 
 app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
