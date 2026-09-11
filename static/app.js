@@ -12,6 +12,7 @@ function showApp(user) {
   $("sidebar-user-email").textContent = user.email;
   refreshTicker();
   refreshSidebarConn();
+  loadDashboard();
 }
 
 async function checkAuth() {
@@ -86,6 +87,7 @@ $("btn-logout").onclick = async (e) => {
 
 // ---- Tabs ----
 const tabs = {
+  dashboard: { btn: $("tab-dashboard"), view: $("view-dashboard"), title: "Dashboard" },
   scanner: { btn: $("tab-scanner"), view: $("view-scanner"), title: "F&O Directional Scanner" },
   evaluate: { btn: $("tab-evaluate"), view: $("view-evaluate"), title: "Evaluate Signal" },
   history: { btn: $("tab-history"), view: $("view-history"), title: "Signal History" },
@@ -108,6 +110,7 @@ function showTab(name) {
   if (name === "orderbook") loadOrderBook();
   if (name === "broker") loadBrokerTab();
   if (name === "scanner") loadScannerTab();
+  if (name === "dashboard") loadDashboard();
 }
 Object.entries(tabs).forEach(([name, t]) => (t.btn.onclick = () => showTab(name)));
 
@@ -467,11 +470,13 @@ $("detail-modal-backdrop").onclick = closeSignalDetail;
 $("btn-close-detail").onclick = closeSignalDetail;
 
 // ---- History ----
-async function loadHistory() {
-  const res = await fetch("/api/signals");
-  const rows = await res.json();
-  const tbody = document.querySelector("#history-table tbody");
+function renderSignalRows(rows, tableSelector) {
+  const tbody = document.querySelector(`${tableSelector} tbody`);
   tbody.innerHTML = "";
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="color:var(--muted)">No signals yet.</td></tr>`;
+    return;
+  }
   rows.forEach((s) => {
     const tr = document.createElement("tr");
     tr.className = "history-row-clickable";
@@ -497,7 +502,7 @@ async function loadHistory() {
     tbody.appendChild(tr);
   });
 
-  document.querySelectorAll(".outcome-select").forEach((sel) => {
+  tbody.querySelectorAll(".outcome-select").forEach((sel) => {
     sel.onclick = (e) => e.stopPropagation();
     sel.onchange = async (e) => {
       e.stopPropagation();
@@ -509,6 +514,76 @@ async function loadHistory() {
     };
   });
 }
+
+async function loadHistory() {
+  const res = await fetch("/api/signals");
+  const rows = await res.json();
+  renderSignalRows(rows, "#history-table");
+}
+
+// ---- Dashboard (home) ----
+async function loadDashboard() {
+  await Promise.all([loadDashboardSummary(), loadDashboardSignals()]);
+}
+
+async function loadDashboardSignals() {
+  const res = await fetch("/api/signals");
+  const rows = await res.json();
+  renderSignalRows(rows.slice(0, 15), "#dashboard-signals-table");
+}
+
+async function loadDashboardSummary() {
+  const tiles = [];
+
+  try {
+    const meRes = await fetch("/api/me");
+    const posRes = await fetch("/api/trading/pnl-summary");
+    if (posRes.ok) {
+      const pnl = await posRes.json();
+      tiles.push(["Open positions", pnl.open_positions]);
+      tiles.push(["Realized P&L today", (pnl.realized_today >= 0 ? "+" : "") + pnl.realized_today]);
+    }
+  } catch (e) {}
+
+  try {
+    const sigRes = await fetch("/api/signals");
+    if (sigRes.ok) {
+      const signals = await sigRes.json();
+      tiles.push(["Total signals", signals.length]);
+      const pending = signals.filter((s) => s.outcome === "pending").length;
+      tiles.push(["Pending outcome", pending]);
+    }
+  } catch (e) {}
+
+  try {
+    const scanRes = await fetch("/api/scanner/runs/latest");
+    if (scanRes.ok) {
+      const run = await scanRes.json();
+      tiles.push(["CE qualified", run.ce_qualified_count]);
+      tiles.push(["PE qualified", run.pe_qualified_count]);
+      tiles.push(["Last scan", run.completed_at ? new Date(run.completed_at).toLocaleTimeString("en-IN") : run.status]);
+    } else {
+      tiles.push(["F&O scan", "none yet"]);
+    }
+  } catch (e) {}
+
+  try {
+    const tgRes = await fetch("/api/telegram/status");
+    if (tgRes.ok) {
+      const tg = await tgRes.json();
+      tiles.push(["Telegram", tg.listening ? "Listening" : tg.authorized ? "Connected" : "Not connected"]);
+    }
+  } catch (e) {}
+
+  $("dashboard-summary-grid").innerHTML = tiles
+    .map(([label, value]) => `<div class="summary-tile"><div class="tile-value">${value}</div><div class="tile-label">${label}</div></div>`)
+    .join("");
+}
+
+$("dashboard-view-all").onclick = (e) => {
+  e.preventDefault();
+  showTab("history");
+};
 
 // ---- Telegram ----
 async function loadTelegramTab() {

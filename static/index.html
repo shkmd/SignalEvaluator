@@ -55,8 +55,9 @@
         </div>
       </div>
       <nav class="sidebar-nav">
+        <button id="tab-dashboard" class="nav-item active"><span class="nav-icon">🏠</span>Dashboard</button>
         <button id="tab-scanner" class="nav-item"><span class="nav-icon">🔍</span>F&amp;O Scanner</button>
-        <button id="tab-evaluate" class="nav-item active"><span class="nav-icon">⚡</span>Evaluate</button>
+        <button id="tab-evaluate" class="nav-item"><span class="nav-icon">⚡</span>Evaluate</button>
         <button id="tab-history" class="nav-item"><span class="nav-icon">📜</span>History</button>
         <button id="tab-stats" class="nav-item"><span class="nav-icon">📊</span>Channel Stats</button>
         <button id="tab-telegram" class="nav-item"><span class="nav-icon">💬</span>Telegram</button>
@@ -82,7 +83,27 @@
       </div>
 
       <main>
-        <h1 class="page-title" id="page-title">Evaluate Signal</h1>
+        <h1 class="page-title" id="page-title">Dashboard</h1>
+
+    <!-- DASHBOARD (HOME) TAB -->
+    <section id="view-dashboard">
+      <div class="panel">
+        <div class="summary-grid" id="dashboard-summary-grid"></div>
+      </div>
+
+      <div class="panel">
+        <div class="channels-header">
+          <h2 style="margin:0">Recent Signals</h2>
+          <a href="#" id="dashboard-view-all" class="close-link">View all in History</a>
+        </div>
+        <table id="dashboard-signals-table" style="margin-top:14px">
+          <thead>
+            <tr><th>ID</th><th>Src</th><th>Channel</th><th>Symbol</th><th>Type</th><th>Score</th><th>Verdict</th><th>Outcome</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
 
     <!-- F&O SCANNER TAB -->
     <section id="view-scanner" class="hidden">
@@ -134,7 +155,7 @@
     </section>
 
     <!-- EVALUATE TAB -->
-    <section id="view-evaluate">
+    <section id="view-evaluate" class="hidden">
       <div class="panel">
         <h2>1. Paste the signal</h2>
         <textarea id="raw-text" placeholder="POSITIONAL
