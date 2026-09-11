@@ -353,6 +353,21 @@ function renderEvaluation(data, prefix) {
   `
     : `<div style="color:var(--muted)">${rr.reason || "Entry/SL/targets incomplete."}</div>`;
 
+  const scr = data.screener || {};
+  const screenerEl = $(id("screener-list"));
+  if (scr.available) {
+    screenerEl.innerHTML =
+      `<div style="color:var(--muted);font-size:12px;margin-bottom:6px">${scr.passed}/${scr.total} conditions met</div>` +
+      scr.checks
+        .map(
+          (c) =>
+            `<div class="screener-check ${c.passed ? "pass" : "fail"}"><span class="check-icon">${c.passed ? "✓" : "✕"}</span>${c.name}</div>`
+        )
+        .join("");
+  } else {
+    screenerEl.innerHTML = `<div style="color:var(--muted);font-size:13px">${scr.reason || "Not available."}</div>`;
+  }
+
   const newsEl = $(id("news-list"));
   newsEl.innerHTML = "";
   const n = data.news || {};
@@ -398,6 +413,8 @@ const DETAIL_MODAL_TEMPLATE = `
   </div>
   <h2 style="margin-top:20px">Risk / Reward</h2>
   <div class="kv" id="d-rr-kv"></div>
+  <h2 style="margin-top:20px">Screener checklist</h2>
+  <div id="d-screener-list"></div>
   <h2 style="margin-top:20px">Recent news</h2>
   <div id="d-news-list"></div>
 `;

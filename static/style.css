@@ -249,6 +249,12 @@ select.outcome-select { font-size: 12px; padding: 4px 6px; }
 .history-row-clickable { cursor: pointer; }
 .history-row-clickable:hover { background: var(--panel-2); }
 
+.screener-check { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+.screener-check:last-child { border-bottom: none; }
+.screener-check .check-icon { width: 16px; text-align: center; flex-shrink: 0; }
+.screener-check.pass .check-icon { color: var(--green); }
+.screener-check.fail .check-icon { color: var(--red); }
+
 .channels-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .channels-subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .close-link { color: var(--muted); font-size: 12px; text-decoration: none; }

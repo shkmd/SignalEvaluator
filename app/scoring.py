@@ -25,7 +25,8 @@ def risk_reward(entry_low, entry_high, sl, targets):
     }
 
 
-def evaluate_signal(signal: dict, technicals: dict, options_data: dict, news: dict) -> dict:
+def evaluate_signal(signal: dict, technicals: dict, options_data: dict, news: dict, screener: dict = None) -> dict:
+    screener = screener or {"available": False}
     direction = "bearish" if (signal.get("instrument") == "PE" or signal.get("action") == "sell") else "bullish"
 
     score = 0
@@ -143,6 +144,22 @@ def evaluate_signal(signal: dict, technicals: dict, options_data: dict, news: di
             breakdown.append(("News sentiment", 8, 15, "Recent headlines are neutral/mixed."))
     else:
         breakdown.append(("News sentiment", 0, 15, "No recent headlines found."))
+
+    # --- Screener confirmation (20 pts) ---
+    max_score += 20
+    if screener.get("available"):
+        passed, total = screener["passed"], screener["total"]
+        pts = round(20 * passed / total) if total else 0
+        score += pts
+        failed_names = [c["name"] for c in screener["checks"] if not c["passed"]]
+        note = f"{passed}/{total} screener conditions met."
+        if failed_names:
+            note += " Missing: " + "; ".join(failed_names[:3]) + ("…" if len(failed_names) > 3 else "")
+        breakdown.append(("Screener confirmation", pts, 20, note))
+        if passed / total < 0.5:
+            red_flags.append(f"Only {passed}/{total} screener conditions met (range expansion, MTF trend, volume, SMA, intraday follow-through).")
+    else:
+        breakdown.append(("Screener confirmation", 0, 20, screener.get("reason", "Not available.")))
 
     # --- Risk/Reward (10 pts) ---
     max_score += 10

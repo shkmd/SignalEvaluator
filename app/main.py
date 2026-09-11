@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
-from app import telegram_ingest, telegram_auth, market, trading, auth
+from app import telegram_ingest, telegram_auth, market, trading, auth, screener
 from app.telegram_client import reset_client
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -186,11 +186,13 @@ def evaluate(req: EvaluateRequest, user_id: int = Depends(current_user_id)):
     tech = technicals.fetch_technicals(resolved_symbol, direction=direction)
     opts = options_mod.fetch_option_chain_snapshot(resolved_symbol, req.strike, instrument)
     headlines = news_mod.fetch_news(resolved_symbol)
+    scr = screener.evaluate_screener(resolved_symbol, direction)
 
-    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines)
+    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines, scr)
     evaluation["technicals"] = tech
     evaluation["options"] = opts
     evaluation["news"] = headlines
+    evaluation["screener"] = scr
 
     signal_id = db.insert_signal(user_id, signal, evaluation, req.channel or "unknown")
     evaluation["signal_id"] = signal_id
