@@ -266,6 +266,7 @@ $("btn-evaluate").onclick = async () => {
     });
     if (!res.ok) throw new Error("Evaluation request failed (" + res.status + ")");
     const data = await res.json();
+    renderTradeSetup(payload, "trade-setup");
     renderResult(data);
     $("eval-status").textContent = "Saved as signal #" + data.signal_id;
   } catch (e) {
@@ -419,6 +420,29 @@ function renderEvaluation(data, prefix) {
   }
 }
 
+function renderTradeSetup(s, elId) {
+  const el = $(elId);
+  if (!el) return;
+  const entry = s.entry_low === s.entry_high ? s.entry_low : `${s.entry_low}-${s.entry_high}`;
+  const targets = (s.targets || []).join(" / ");
+  const actionLabel = s.action === "sell" ? "SELL" : "BUY";
+  const label = s.instrument === "EQ" ? "Price" : "Premium";
+  el.innerHTML = `
+    <div class="ts-item">
+      <div class="ts-label">${actionLabel} ${label}</div>
+      <div class="ts-value buy">${entry ?? "-"}</div>
+    </div>
+    <div class="ts-item">
+      <div class="ts-label">Stop Loss</div>
+      <div class="ts-value sl">${s.sl ?? "-"}</div>
+    </div>
+    <div class="ts-item">
+      <div class="ts-label">Target${(s.targets || []).length > 1 ? "s" : ""}</div>
+      <div class="ts-value target">${targets || "-"}</div>
+    </div>
+  `;
+}
+
 const DETAIL_MODAL_TEMPLATE = `
   <div class="score-header">
     <div class="score-circle" id="d-score-circle">--</div>
@@ -472,6 +496,7 @@ async function openSignalDetail(signalId) {
       $("detail-raw-text").textContent = s.raw_text;
       $("detail-raw-text").classList.remove("hidden");
     }
+    renderTradeSetup(s, "detail-trade-setup");
     renderEvaluation(s.evaluation || {}, "d-");
   } catch (e) {
     $("detail-modal-body").innerHTML = `<div style="color:var(--red);padding:20px">Error: ${e.message}</div>`;
