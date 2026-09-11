@@ -515,7 +515,7 @@ function renderSignalRows(rows, tableSelector) {
   const tbody = document.querySelector(`${tableSelector} tbody`);
   tbody.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" style="color:var(--muted)">No signals yet.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" style="color:var(--muted)">No signals yet.</td></tr>`;
     return;
   }
   rows.forEach((s) => {
@@ -524,12 +524,17 @@ function renderSignalRows(rows, tableSelector) {
     tr.title = "Click for full evaluation report";
     const scoreCls = s.score >= 70 ? "text-up" : s.score >= 50 ? "text-warn" : "text-down";
     const tagCls = s.score >= 70 ? "tag-strong" : s.score >= 50 ? "tag-moderate" : "tag-weak";
+    const entry = s.entry_low == null ? "-" : s.entry_low === s.entry_high ? s.entry_low : `${s.entry_low}-${s.entry_high}`;
+    const targets = (s.targets || []).join("/") || "-";
     tr.innerHTML = `
       <td>${s.id}</td>
       <td>${s.source === "telegram" ? "📡" : s.source === "scanner" ? "🔍" : "✍️"}</td>
       <td>${s.channel}</td>
       <td>${s.resolved_symbol || s.symbol}${s.instrument !== "EQ" ? " " + s.strike + s.instrument : ""}</td>
       <td>${s.signal_type}</td>
+      <td class="text-up">${entry}</td>
+      <td class="text-down">${s.sl ?? "-"}</td>
+      <td style="color:var(--blue)">${targets}</td>
       <td class="${scoreCls}" style="font-weight:600">${s.score}</td>
       <td><span class="tag ${tagCls}">${s.verdict}</span></td>
       <td>
