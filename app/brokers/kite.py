@@ -127,6 +127,45 @@ def resolve_instrument_token(user_id: int, tradingsymbol: str, exchange: str = "
     return int(match.iloc[0]["instrument_token"])
 
 
+def find_atm_option(user_id: int, name: str, current_price: float, instrument: str) -> dict:
+    """Nearest-to-money strike at the nearest upcoming expiry, using Kite's own NFO
+    instrument dump plus a live quote for premium/OI -- more reliable than NSE scraping."""
+    df = _load_instruments(user_id, "NFO")
+    opts = df[(df["name"] == name.upper()) & (df["instrument_type"] == instrument.upper())]
+    if opts.empty:
+        return {"available": False, "reason": f"No {instrument} contracts found for {name} on Kite's NFO list."}
+
+    today = datetime.now(IST).date()
+    opts = opts.copy()
+    opts["expiry_date"] = pd.to_datetime(opts["expiry"]).dt.date
+    upcoming = opts[opts["expiry_date"] >= today]
+    if upcoming.empty:
+        return {"available": False, "reason": f"No upcoming {instrument} expiries found for {name}."}
+
+    nearest_expiry = upcoming["expiry_date"].min()
+    at_expiry = upcoming[upcoming["expiry_date"] == nearest_expiry]
+    closest = at_expiry.iloc[(at_expiry["strike"] - current_price).abs().argsort().iloc[0]]
+
+    tradingsymbol = closest["tradingsymbol"]
+    kite = get_client(user_id)
+    try:
+        quote = kite.quote([f"NFO:{tradingsymbol}"])[f"NFO:{tradingsymbol}"]
+    except Exception as e:
+        return {"available": False, "reason": f"Quote fetch failed for {tradingsymbol}: {e}"}
+
+    return {
+        "available": True,
+        "source": "kite",
+        "tradingsymbol": tradingsymbol,
+        "expiry": nearest_expiry.isoformat(),
+        "strike": float(closest["strike"]),
+        "ltp": quote.get("last_price"),
+        "oi": quote.get("oi"),
+        "volume": quote.get("volume"),
+        "lot_size": int(closest["lot_size"]),
+    }
+
+
 def fetch_fo_underlyings(user_id: int) -> list:
     """F&O-eligible stocks with real lot sizes and expiries, from Kite's own NFO instrument
     dump -- replaces the symbol-name-only list from the free NSE endpoint."""
