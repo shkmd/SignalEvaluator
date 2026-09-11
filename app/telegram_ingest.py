@@ -5,7 +5,7 @@ import asyncio
 
 from telethon import events
 
-from app import db, scoring, trading, screener, stock_score
+from app import db, scoring, trading, screener, stock_score, telegram_broadcast
 from app import parser as signal_parser
 from app import technicals, options as options_mod, news as news_mod
 from app.telegram_client import get_client
@@ -164,3 +164,4 @@ def _evaluate_and_store(user_id: int, parsed: dict, chat_id: int, message_id: in
         trade_result = trading.auto_trade_check(user_id, signal_id, signal, evaluation)
         if trade_result and trade_result.get("placed"):
             print(f"[trading] user {user_id}: paper order #{trade_result['order_id']} placed for signal #{signal_id}")
+        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)

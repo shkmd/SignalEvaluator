@@ -13,7 +13,7 @@ Only fires for a genuine transition into CE_QUALIFIED/PE_QUALIFIED (the stock wa
 qualified for that direction in the previous scan), so one continuous qualification period
 produces one signal, not one every scan.
 """
-from app import db, scoring, trading
+from app import db, scoring, trading, telegram_broadcast
 from app import technicals, options as options_mod, news as news_mod, screener, stock_score
 
 MIN_RISK_PCT = 0.005  # floor so a same-day close==low (or close==high) never yields zero risk
@@ -145,4 +145,5 @@ def _generate_one(user_id: int, result: dict, classification: str) -> int:
     signal_id = db.insert_signal(user_id, signal, evaluation, "F&O Scanner", source="scanner")
     if signal_id:
         trading.auto_trade_check(user_id, signal_id, signal, evaluation)
+        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
     return signal_id

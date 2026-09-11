@@ -188,6 +188,15 @@ CREATE TABLE IF NOT EXISTS scanner_signal_settings (
     enabled INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+CREATE TABLE IF NOT EXISTS telegram_broadcast_settings (
+    user_id INTEGER PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    target_chat_id INTEGER,
+    target_chat_title TEXT,
+    min_score REAL NOT NULL DEFAULT 60,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 """
 
 
@@ -1083,5 +1092,39 @@ def list_users_with_scanner_signals_enabled() -> list:
     try:
         rows = conn.execute("SELECT user_id FROM scanner_signal_settings WHERE enabled = 1").fetchall()
         return [r["user_id"] for r in rows]
+    finally:
+        conn.close()
+
+
+# ---- Telegram broadcast settings (per user) ----
+
+def get_telegram_broadcast_settings(user_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM telegram_broadcast_settings WHERE user_id = ?", (user_id,)).fetchone()
+        if not row:
+            return {"user_id": user_id, "enabled": False, "target_chat_id": None, "target_chat_title": None, "min_score": 60}
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def save_telegram_broadcast_settings(user_id: int, enabled: bool, target_chat_id: int, target_chat_title: str, min_score: float) -> dict:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO telegram_broadcast_settings (user_id, enabled, target_chat_id, target_chat_title, min_score)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                target_chat_id = excluded.target_chat_id,
+                target_chat_title = excluded.target_chat_title,
+                min_score = excluded.min_score
+            """,
+            (user_id, 1 if enabled else 0, target_chat_id, target_chat_title, min_score),
+        )
+        conn.commit()
+        return get_telegram_broadcast_settings(user_id)
     finally:
         conn.close()

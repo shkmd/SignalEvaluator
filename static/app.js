@@ -630,7 +630,51 @@ $("dashboard-view-all").onclick = (e) => {
 async function loadTelegramTab() {
   await refreshTelegramStatus();
   await refreshTelegramChannels();
+  await loadBroadcastSettings();
 }
+
+async function loadBroadcastSettings() {
+  const select = $("bc-target-channel");
+  select.innerHTML =
+    `<option value="">-- choose a channel --</option>` +
+    _allChannels
+      .map((c) => `<option value="${c.telegram_chat_id}" data-title="${(c.title || "").replace(/"/g, "&quot;")}">${c.title || c.telegram_chat_id}</option>`)
+      .join("");
+
+  const res = await fetch("/api/telegram/broadcast-settings");
+  const s = await res.json();
+  $("bc-enabled").value = String(!!s.enabled);
+  $("bc-min-score").value = s.min_score ?? 60;
+  if (s.target_chat_id) select.value = String(s.target_chat_id);
+}
+
+$("btn-save-broadcast-settings").onclick = async () => {
+  const statusEl = $("broadcast-settings-status");
+  const select = $("bc-target-channel");
+  const selectedOption = select.options[select.selectedIndex];
+  const payload = {
+    enabled: $("bc-enabled").value === "true",
+    target_chat_id: select.value ? parseInt(select.value, 10) : null,
+    target_chat_title: select.value ? selectedOption.dataset.title || selectedOption.textContent : null,
+    min_score: parseFloat($("bc-min-score").value) || 0,
+  };
+  if (payload.enabled && !payload.target_chat_id) {
+    statusEl.textContent = "Pick a target channel first.";
+    return;
+  }
+  statusEl.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/telegram/broadcast-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
+    statusEl.textContent = "Saved.";
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+};
 
 async function refreshTelegramStatus() {
   const badge = $("telegram-status-badge");

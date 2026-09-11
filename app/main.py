@@ -10,7 +10,7 @@ from typing import Optional, List
 
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
-from app import fo_universe, scanner
+from app import fo_universe, scanner, telegram_broadcast
 from app.brokers import kite as kite_broker
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from app.telegram_client import reset_client
@@ -202,6 +202,8 @@ def evaluate(req: EvaluateRequest, user_id: int = Depends(current_user_id)):
     signal_id = db.insert_signal(user_id, signal, evaluation, req.channel or "unknown")
     evaluation["signal_id"] = signal_id
     evaluation["auto_trade"] = trading.auto_trade_check(user_id, signal_id, signal, evaluation)
+    if signal_id:
+        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
 
     return evaluation
 
@@ -569,6 +571,25 @@ def kite_callback(request_token: str, user_id: int = Depends(current_user_id)):
 @app.get("/api/broker/kite/status")
 def kite_status(user_id: int = Depends(current_user_id)):
     return kite_broker.get_status(user_id)
+
+
+class TelegramBroadcastSettingsRequest(BaseModel):
+    enabled: bool
+    target_chat_id: Optional[int] = None
+    target_chat_title: Optional[str] = None
+    min_score: float = 60
+
+
+@app.get("/api/telegram/broadcast-settings")
+def get_telegram_broadcast_settings(user_id: int = Depends(current_user_id)):
+    return db.get_telegram_broadcast_settings(user_id)
+
+
+@app.post("/api/telegram/broadcast-settings")
+def save_telegram_broadcast_settings(req: TelegramBroadcastSettingsRequest, user_id: int = Depends(current_user_id)):
+    return db.save_telegram_broadcast_settings(
+        user_id, req.enabled, req.target_chat_id, req.target_chat_title, req.min_score
+    )
 
 
 app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")

@@ -393,6 +393,34 @@ Target 16/18/20/24/30+"></textarea>
           <span id="sync-status" style="color:var(--muted);font-size:12px"></span>
         </div>
       </div>
+
+      <div class="panel">
+        <h2>Broadcast Signals</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+          Automatically posts every new signal (manual, Telegram-sourced, or F&amp;O Scanner) that
+          clears the score below to a channel you have posting rights to -- sent immediately via
+          your own connected Telegram session, no preview step. The min score exists to keep weak
+          signals from spamming the channel.
+        </div>
+        <div class="grid" style="grid-template-columns: repeat(3, 1fr)">
+          <label>Broadcast
+            <select id="bc-enabled">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+          </label>
+          <label>Target channel
+            <select id="bc-target-channel"><option value="">Sync channels first</option></select>
+          </label>
+          <label>Min score to send
+            <input id="bc-min-score" type="number" min="0" max="100" step="1" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" id="btn-save-broadcast-settings">Save broadcast settings</button>
+          <span id="broadcast-settings-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+      </div>
     </section>
 
     <!-- POSITIONS TAB -->
