@@ -522,14 +522,16 @@ function renderSignalRows(rows, tableSelector) {
     const tr = document.createElement("tr");
     tr.className = "history-row-clickable";
     tr.title = "Click for full evaluation report";
+    const scoreCls = s.score >= 70 ? "text-up" : s.score >= 50 ? "text-warn" : "text-down";
+    const tagCls = s.score >= 70 ? "tag-strong" : s.score >= 50 ? "tag-moderate" : "tag-weak";
     tr.innerHTML = `
       <td>${s.id}</td>
       <td>${s.source === "telegram" ? "📡" : s.source === "scanner" ? "🔍" : "✍️"}</td>
       <td>${s.channel}</td>
       <td>${s.resolved_symbol || s.symbol}${s.instrument !== "EQ" ? " " + s.strike + s.instrument : ""}</td>
       <td>${s.signal_type}</td>
-      <td>${s.score}</td>
-      <td>${s.verdict}</td>
+      <td class="${scoreCls}" style="font-weight:600">${s.score}</td>
+      <td><span class="tag ${tagCls}">${s.verdict}</span></td>
       <td>
         <select class="outcome-select" data-id="${s.id}">
           <option value="pending" ${s.outcome === "pending" ? "selected" : ""}>Pending</option>
@@ -564,7 +566,73 @@ async function loadHistory() {
 
 // ---- Dashboard (home) ----
 async function loadDashboard() {
-  await Promise.all([loadDashboardSummary(), loadDashboardSignals()]);
+  await Promise.all([loadDashboardCards(), loadDashboardSummary(), loadDashboardSignals()]);
+}
+
+const IDX_GLYPH = { "NIFTY 50": "N", "BANK NIFTY": "B", "SENSEX": "S" };
+function sparkPath(dir) {
+  // Decorative -- we only have a live last/change point from the ticker API, not an
+  // intraday series, so the shape is a static up/down-biased squiggle in the right color.
+  const up = "0,52 26,48 52,54 78,40 104,44 130,32 156,36 182,24 208,28 234,18 260,14";
+  const down = "0,28 26,22 52,34 78,30 104,44 130,38 156,50 182,44 208,56 234,50 260,58";
+  return dir === "up" ? up : down;
+}
+async function loadDashboardCards() {
+  const container = $("dashboard-cards");
+  let quotesHtml = "";
+  try {
+    const res = await fetch("/api/market/ticker");
+    const quotes = await res.json();
+    quotesHtml = quotes
+      .filter((q) => q.available)
+      .map((q) => {
+        const dir = q.change >= 0 ? "up" : "down";
+        const arrow = q.change >= 0 ? "▲" : "▼";
+        const points = sparkPath(dir);
+        const color = dir === "up" ? "var(--green)" : "var(--red)";
+        return `
+          <div class="card">
+            <div class="card-top">
+              <div class="card-id">
+                <div class="glyph" style="color:${color}">${IDX_GLYPH[q.label] || q.label[0]}</div>
+                <div><div class="label">Index</div><div class="card-name">${q.label}</div></div>
+              </div>
+              <div class="go">↗</div>
+            </div>
+            <div>
+              <div class="label" style="text-transform:none;letter-spacing:0;font-size:11px;margin-bottom:4px">Spot</div>
+              <div class="metric">${q.last.toLocaleString("en-IN")}</div>
+              <div class="delta text-${dir}">${arrow} ${Math.abs(q.change).toFixed(2)} (${Math.abs(q.pct_change).toFixed(2)}%)</div>
+            </div>
+            <svg class="spark" viewBox="0 0 260 70" preserveAspectRatio="none">
+              <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.6"></polyline>
+            </svg>
+          </div>`;
+      })
+      .join("");
+  } catch (e) {
+    // leave quotesHtml empty; still show the promo card below
+  }
+
+  container.innerHTML =
+    quotesHtml +
+    `<div class="promo">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-family:var(--font-display);font-weight:600;font-size:14px;color:#fff">Auto-Evaluate</span>
+        <span class="promo-tag">Live</span>
+      </div>
+      <h3>Score every incoming call automatically</h3>
+      <p>Rules run on each Telegram signal and the F&amp;O Scanner, and push a verdict before entry.</p>
+      <div style="margin-top:auto;display:flex;flex-direction:column;gap:9px">
+        <button class="btn btn-primary" id="promo-go-scanner">Open F&amp;O Scanner</button>
+        <button class="btn btn-ghost" id="promo-go-broker">Configure auto-trade</button>
+      </div>
+    </div>`;
+
+  const goScanner = $("promo-go-scanner");
+  if (goScanner) goScanner.onclick = () => showTab("scanner");
+  const goBroker = $("promo-go-broker");
+  if (goBroker) goBroker.onclick = () => showTab("broker");
 }
 
 async function loadDashboardSignals() {
