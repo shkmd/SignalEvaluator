@@ -23,8 +23,11 @@ async def start_listener(user_id: int) -> bool:
         return False
 
     if user_id not in _handler_registered_users:
+        # No incoming=True filter: channels you post/test in yourself would otherwise be
+        # marked "outgoing" and silently skipped, which is exactly the case that trips
+        # people up when testing. We want every new message in a watched channel, period.
         client.add_event_handler(
-            lambda event, uid=user_id: _on_new_message(event, uid), events.NewMessage(incoming=True)
+            lambda event, uid=user_id: _on_new_message(event, uid), events.NewMessage()
         )
         _handler_registered_users.add(user_id)
 
