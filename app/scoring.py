@@ -25,8 +25,16 @@ def risk_reward(entry_low, entry_high, sl, targets):
     }
 
 
-def evaluate_signal(signal: dict, technicals: dict, options_data: dict, news: dict, screener: dict = None) -> dict:
+def evaluate_signal(
+    signal: dict,
+    technicals: dict,
+    options_data: dict,
+    news: dict,
+    screener: dict = None,
+    stock_context: dict = None,
+) -> dict:
     screener = screener or {"available": False}
+    stock_context = stock_context or {"available": False}
     direction = "bearish" if (signal.get("instrument") == "PE" or signal.get("action") == "sell") else "bullish"
 
     score = 0
@@ -144,6 +152,38 @@ def evaluate_signal(signal: dict, technicals: dict, options_data: dict, news: di
             breakdown.append(("News sentiment", 8, 15, "Recent headlines are neutral/mixed."))
     else:
         breakdown.append(("News sentiment", 0, 15, "No recent headlines found."))
+
+    # --- Stock context: market-cap tier + sector strength (15 pts) ---
+    max_score += 15
+    if stock_context.get("available"):
+        tier = stock_context.get("tier")
+        tier_pts = {"large-cap": 8, "mid-cap": 5, "small-cap": 2, "unknown": 0}.get(tier, 0)
+        score += tier_pts
+        cap_note = (
+            f"{tier} (~₹{stock_context['market_cap_cr']:,.0f} cr)" if stock_context.get("market_cap_cr") else tier
+        )
+        if tier == "small-cap":
+            red_flags.append("Small-cap stock -- lower liquidity, wider spreads, higher volatility risk.")
+
+        sector_pts = 0
+        sector_note = "Sector strength not available."
+        rel = stock_context.get("sector_rel_strength_10d")
+        if rel is not None:
+            favorable = (direction == "bullish" and rel > 0) or (direction == "bearish" and rel < 0)
+            sector_pts = 7 if favorable else 0
+            sector_note = (
+                f"10d vs {stock_context.get('sector')} sector: {rel:+.2%} "
+                f"({'leading peers' if favorable else 'lagging peers'})"
+            )
+            if not favorable:
+                red_flags.append(
+                    f"Stock is lagging its own sector ({stock_context.get('sector')}), which cuts against this call."
+                )
+        score += sector_pts
+
+        breakdown.append(("Stock context", tier_pts + sector_pts, 15, f"{cap_note}. {sector_note}"))
+    else:
+        breakdown.append(("Stock context", 0, 15, stock_context.get("reason", "Not available.")))
 
     # --- Screener confirmation (20 pts) ---
     max_score += 20

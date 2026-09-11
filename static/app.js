@@ -343,6 +343,17 @@ function renderEvaluation(data, prefix) {
   `
     : `<div style="color:var(--muted)">${o.reason || "Not available."}</div>`;
 
+  const sc = data.stock_context || {};
+  $(id("stock-kv")).innerHTML = sc.available
+    ? `
+    <div><span>Market cap</span>${sc.market_cap_cr ? "₹" + sc.market_cap_cr.toLocaleString("en-IN") + " cr" : "n/a"}</div>
+    <div><span>Tier</span>${sc.tier}</div>
+    <div><span>Sector</span>${sc.sector || "n/a"}</div>
+    <div><span>Industry</span>${sc.industry || "n/a"}</div>
+    <div><span>Sector rel. strength (10d)</span>${sc.sector_rel_strength_10d != null ? (sc.sector_rel_strength_10d * 100).toFixed(2) + "%" : "n/a"}</div>
+  `
+    : `<div style="color:var(--muted)">${sc.reason || "Not available."}</div>`;
+
   const rr = data.risk_reward || {};
   $(id("rr-kv")).innerHTML = rr.available
     ? `
@@ -411,6 +422,8 @@ const DETAIL_MODAL_TEMPLATE = `
       <div class="kv" id="d-opts-kv"></div>
     </div>
   </div>
+  <h2 style="margin-top:20px">Stock Context</h2>
+  <div class="kv" id="d-stock-kv"></div>
   <h2 style="margin-top:20px">Risk / Reward</h2>
   <div class="kv" id="d-rr-kv"></div>
   <h2 style="margin-top:20px">Screener checklist</h2>
