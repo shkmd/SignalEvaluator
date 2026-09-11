@@ -203,6 +203,8 @@ def evaluate(req: EvaluateRequest, user_id: int = Depends(current_user_id)):
     evaluation["signal_id"] = signal_id
     evaluation["auto_trade"] = trading.auto_trade_check(user_id, signal_id, signal, evaluation)
     if signal_id:
+        saved = db.get_signal(user_id, signal_id)
+        evaluation["lot_size"] = saved.get("lot_size") if saved else None
         telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
 
     return evaluation

@@ -266,7 +266,7 @@ $("btn-evaluate").onclick = async () => {
     });
     if (!res.ok) throw new Error("Evaluation request failed (" + res.status + ")");
     const data = await res.json();
-    renderTradeSetup(payload, "trade-setup");
+    renderTradeSetup({ ...payload, lot_size: data.lot_size }, "trade-setup");
     renderResult(data);
     $("eval-status").textContent = "Saved as signal #" + data.signal_id;
   } catch (e) {
@@ -420,6 +420,26 @@ function renderEvaluation(data, prefix) {
   }
 }
 
+// Lot size: from the signal itself (real value from Kite/F&O universe at signal-creation
+// time), else 1 for equity (share-based, no lot). Max profit/loss are the practical
+// at-target / at-SL outcomes for a single lot -- not a theoretical options payout diagram.
+function computeMaxPL(s) {
+  const lot = s.lot_size || (s.instrument === "EQ" ? 1 : null);
+  const entryRef = s.entry_high ?? s.entry_low;
+  const targets = s.targets || [];
+  const bestTarget = targets.length ? targets[targets.length - 1] : null;
+  let maxProfit = null;
+  let maxLoss = null;
+  if (lot && entryRef != null) {
+    if (bestTarget != null) maxProfit = Math.abs(bestTarget - entryRef) * lot;
+    if (s.sl != null) maxLoss = Math.abs(entryRef - s.sl) * lot;
+  }
+  return { lot, maxProfit, maxLoss };
+}
+function fmtRupees(v) {
+  return v == null ? "-" : "₹" + Math.round(v).toLocaleString("en-IN");
+}
+
 function renderTradeSetup(s, elId) {
   const el = $(elId);
   if (!el) return;
@@ -427,6 +447,7 @@ function renderTradeSetup(s, elId) {
   const targets = (s.targets || []).join(" / ");
   const actionLabel = s.action === "sell" ? "SELL" : "BUY";
   const label = s.instrument === "EQ" ? "Price" : "Premium";
+  const { lot, maxProfit, maxLoss } = computeMaxPL(s);
   el.innerHTML = `
     <div class="ts-item">
       <div class="ts-label">${actionLabel} ${label}</div>
@@ -439,6 +460,18 @@ function renderTradeSetup(s, elId) {
     <div class="ts-item">
       <div class="ts-label">Target${(s.targets || []).length > 1 ? "s" : ""}</div>
       <div class="ts-value target">${targets || "-"}</div>
+    </div>
+    <div class="ts-item">
+      <div class="ts-label">Lot Size</div>
+      <div class="ts-value">${lot ?? "-"}</div>
+    </div>
+    <div class="ts-item">
+      <div class="ts-label">Max Profit</div>
+      <div class="ts-value buy">${maxProfit != null ? "+" + fmtRupees(maxProfit) : "-"}</div>
+    </div>
+    <div class="ts-item">
+      <div class="ts-label">Max Loss</div>
+      <div class="ts-value sl">${maxLoss != null ? "-" + fmtRupees(maxLoss) : "-"}</div>
     </div>
   `;
 }
@@ -515,7 +548,7 @@ function renderSignalRows(rows, tableSelector) {
   const tbody = document.querySelector(`${tableSelector} tbody`);
   tbody.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="11" style="color:var(--muted)">No signals yet.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="14" style="color:var(--muted)">No signals yet.</td></tr>`;
     return;
   }
   rows.forEach((s) => {
@@ -526,6 +559,7 @@ function renderSignalRows(rows, tableSelector) {
     const tagCls = s.score >= 70 ? "tag-strong" : s.score >= 50 ? "tag-moderate" : "tag-weak";
     const entry = s.entry_low == null ? "-" : s.entry_low === s.entry_high ? s.entry_low : `${s.entry_low}-${s.entry_high}`;
     const targets = (s.targets || []).join("/") || "-";
+    const { lot, maxProfit, maxLoss } = computeMaxPL(s);
     tr.innerHTML = `
       <td>${s.id}</td>
       <td>${s.source === "telegram" ? "📡" : s.source === "scanner" ? "🔍" : "✍️"}</td>
@@ -535,6 +569,9 @@ function renderSignalRows(rows, tableSelector) {
       <td class="text-up">${entry}</td>
       <td class="text-down">${s.sl ?? "-"}</td>
       <td style="color:var(--blue)">${targets}</td>
+      <td>${lot ?? "-"}</td>
+      <td class="text-up">${maxProfit != null ? "+" + fmtRupees(maxProfit) : "-"}</td>
+      <td class="text-down">${maxLoss != null ? "-" + fmtRupees(maxLoss) : "-"}</td>
       <td class="${scoreCls}" style="font-weight:600">${s.score}</td>
       <td><span class="tag ${tagCls}">${s.verdict}</span></td>
       <td>

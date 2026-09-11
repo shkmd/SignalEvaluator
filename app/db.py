@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS signals (
     source TEXT NOT NULL DEFAULT 'manual',
     telegram_chat_id INTEGER,
     telegram_message_id INTEGER,
+    lot_size INTEGER,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_telegram_msg
@@ -230,6 +231,13 @@ def init_db():
 
         conn.executescript(SCHEMA)
         conn.commit()
+
+        # Additive column migrations for existing installs (never destructive -- see the
+        # user_id migration above for why: a DROP-based reset once wiped a user's real data).
+        cols = {c["name"] for c in conn.execute("PRAGMA table_info(signals)").fetchall()}
+        if "lot_size" not in cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN lot_size INTEGER")
+            conn.commit()
     finally:
         conn.close()
 
@@ -361,13 +369,26 @@ def insert_signal(
 ) -> int:
     conn = _conn()
     try:
+        lot_size = signal.get("lot_size")
+        instrument = signal.get("instrument")
+        if lot_size is None:
+            if instrument == "EQ":
+                lot_size = 1
+            elif instrument in ("CE", "PE") and signal.get("resolved_symbol"):
+                row = conn.execute(
+                    "SELECT lot_size FROM fo_universe WHERE resolved_symbol = ?",
+                    (signal["resolved_symbol"],),
+                ).fetchone()
+                if row and row["lot_size"]:
+                    lot_size = row["lot_size"]
+
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO signals
             (user_id, created_at, channel, raw_text, symbol, resolved_symbol, instrument, strike,
              signal_type, entry_low, entry_high, sl, targets, score, verdict, direction,
-             red_flags, evaluation_json, outcome, source, telegram_chat_id, telegram_message_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+             red_flags, evaluation_json, outcome, source, telegram_chat_id, telegram_message_id, lot_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -376,7 +397,7 @@ def insert_signal(
                 signal.get("raw_text"),
                 signal.get("symbol"),
                 signal.get("resolved_symbol"),
-                signal.get("instrument"),
+                instrument,
                 signal.get("strike"),
                 signal.get("signal_type"),
                 signal.get("entry_low"),
@@ -391,6 +412,7 @@ def insert_signal(
                 source,
                 telegram_chat_id,
                 telegram_message_id,
+                lot_size,
             ),
         )
         conn.commit()

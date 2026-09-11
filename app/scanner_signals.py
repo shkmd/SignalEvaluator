@@ -65,6 +65,7 @@ def _build_atm_signal(symbol: str, resolved_symbol: str, bullish: bool, current_
         "entry_high": premium,
         "sl": sl,
         "targets": [target],
+        "lot_size": atm.get("lot_size"),
     }, atm
 
 
