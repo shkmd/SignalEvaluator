@@ -5,7 +5,7 @@ import io
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app import db, qualification
+from app import db, qualification, scanner_signals
 
 MAX_WORKERS = 8
 
@@ -75,7 +75,19 @@ def run_scan(triggered_by_user_id: int = None) -> dict:
             )
 
     db.finish_scan_run(scan_run_id, counts)
-    return {"scan_run_id": scan_run_id, **counts, "stocks_total": len(universe)}
+
+    signals_generated = []
+    try:
+        signals_generated = scanner_signals.generate_signals_for_scan(scan_run_id)
+    except Exception as e:
+        print(f"[scanner] Signal generation failed for run {scan_run_id}: {e}")
+
+    return {
+        "scan_run_id": scan_run_id,
+        **counts,
+        "stocks_total": len(universe),
+        "signals_generated": len(signals_generated),
+    }
 
 
 def export_results_csv(scan_run_id: int, classification: str = None) -> str:

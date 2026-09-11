@@ -96,6 +96,17 @@
           <button class="primary" id="btn-run-scan">Run scan now</button>
           <span id="scanner-status" style="color:var(--muted);font-size:12px"></span>
         </div>
+        <div class="row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="chk-scanner-signals" style="width:auto" />
+            Generate signals into my History when a stock is newly CE/PE Qualified
+          </label>
+          <span id="scanner-signals-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <div style="color:var(--muted);font-size:11px;margin-top:6px">
+          Uses the underlying's closing price as entry, the day's low/high as stop-loss, and a
+          2:1 risk/reward target -- a directional stock signal, not an option-contract pick.
+        </div>
       </div>
 
       <div class="panel">

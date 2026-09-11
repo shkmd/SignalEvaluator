@@ -182,6 +182,12 @@ CREATE TABLE IF NOT EXISTS scanner_results (
 );
 CREATE INDEX IF NOT EXISTS idx_scanner_results_run ON scanner_results(scan_run_id);
 CREATE INDEX IF NOT EXISTS idx_scanner_results_classification ON scanner_results(scan_run_id, classification);
+
+CREATE TABLE IF NOT EXISTS scanner_signal_settings (
+    user_id INTEGER PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 """
 
 
@@ -978,5 +984,62 @@ def get_scanner_result(scan_run_id: int, symbol: str) -> dict:
             "SELECT * FROM scanner_results WHERE scan_run_id = ? AND symbol = ?", (scan_run_id, symbol)
         ).fetchone()
         return _scanner_result_to_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_previous_classification(before_scan_run_id: int, symbol: str) -> str:
+    """Classification this symbol had in the most recent scan run before the given one --
+    used to detect a fresh transition into CE_QUALIFIED/PE_QUALIFIED rather than re-signaling
+    a stock that's already been qualified for several scans running."""
+    conn = _conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT classification FROM scanner_results
+            WHERE symbol = ? AND scan_run_id < ?
+            ORDER BY scan_run_id DESC LIMIT 1
+            """,
+            (symbol, before_scan_run_id),
+        ).fetchone()
+        return row["classification"] if row else None
+    finally:
+        conn.close()
+
+
+# ---- Scanner-generated signal settings (per user) ----
+
+def get_scanner_signal_settings(user_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM scanner_signal_settings WHERE user_id = ?", (user_id,)).fetchone()
+        if not row:
+            return {"user_id": user_id, "enabled": False}
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def save_scanner_signal_settings(user_id: int, enabled: bool) -> dict:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO scanner_signal_settings (user_id, enabled) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled
+            """,
+            (user_id, 1 if enabled else 0),
+        )
+        conn.commit()
+        return get_scanner_signal_settings(user_id)
+    finally:
+        conn.close()
+
+
+def list_users_with_scanner_signals_enabled() -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute("SELECT user_id FROM scanner_signal_settings WHERE enabled = 1").fetchall()
+        return [r["user_id"] for r in rows]
     finally:
         conn.close()

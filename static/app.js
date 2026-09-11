@@ -478,7 +478,7 @@ async function loadHistory() {
     tr.title = "Click for full evaluation report";
     tr.innerHTML = `
       <td>${s.id}</td>
-      <td>${s.source === "telegram" ? "📡" : "✍️"}</td>
+      <td>${s.source === "telegram" ? "📡" : s.source === "scanner" ? "🔍" : "✍️"}</td>
       <td>${s.channel}</td>
       <td>${s.resolved_symbol || s.symbol}${s.instrument !== "EQ" ? " " + s.strike + s.instrument : ""}</td>
       <td>${s.signal_type}</td>
@@ -995,8 +995,28 @@ let _scannerFilter = "ALL";
 let _scannerLatestRunId = null;
 
 async function loadScannerTab() {
-  await Promise.all([refreshScannerUniverseCount(), loadLatestScanSummary()]);
+  await Promise.all([refreshScannerUniverseCount(), loadLatestScanSummary(), loadScannerSignalSettings()]);
 }
+
+async function loadScannerSignalSettings() {
+  const res = await fetch("/api/scanner/signal-settings");
+  const s = await res.json();
+  $("chk-scanner-signals").checked = !!s.enabled;
+}
+
+$("chk-scanner-signals").onchange = async (e) => {
+  const statusEl = $("scanner-signals-status");
+  try {
+    await fetch("/api/scanner/signal-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: e.target.checked }),
+    });
+    statusEl.textContent = e.target.checked ? "Enabled." : "Disabled.";
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+  }
+};
 
 async function refreshScannerUniverseCount() {
   try {
@@ -1033,7 +1053,8 @@ $("btn-run-scan").onclick = async () => {
     if (!res.ok) throw new Error(data.detail || "Scan failed");
     statusEl.textContent =
       `Scan complete: ${data.stocks_scanned}/${data.stocks_total} scanned -- ` +
-      `${data.ce_qualified} CE, ${data.pe_qualified} PE, ${data.near_ce + data.near_pe} near, ${data.unavailable} unavailable.`;
+      `${data.ce_qualified} CE, ${data.pe_qualified} PE, ${data.near_ce + data.near_pe} near, ${data.unavailable} unavailable` +
+      (data.signals_generated ? `, ${data.signals_generated} signal(s) generated.` : ".");
     await loadLatestScanSummary();
   } catch (e) {
     statusEl.textContent = "Error: " + e.message;

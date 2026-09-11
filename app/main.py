@@ -502,4 +502,18 @@ def export_scanner_csv(
     )
 
 
+class ScannerSignalSettingsRequest(BaseModel):
+    enabled: bool
+
+
+@app.get("/api/scanner/signal-settings")
+def get_scanner_signal_settings(user_id: int = Depends(current_user_id)):
+    return db.get_scanner_signal_settings(user_id)
+
+
+@app.post("/api/scanner/signal-settings")
+def save_scanner_signal_settings(req: ScannerSignalSettingsRequest, user_id: int = Depends(current_user_id)):
+    return db.save_scanner_signal_settings(user_id, req.enabled)
+
+
 app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
