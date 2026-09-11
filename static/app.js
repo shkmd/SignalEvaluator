@@ -262,14 +262,19 @@ function scoreColor(score) {
 }
 
 function renderResult(data) {
+  renderEvaluation(data, "");
   $("result-panel").classList.remove("hidden");
+}
 
-  const circle = $("score-circle");
+function renderEvaluation(data, prefix) {
+  const id = (name) => prefix + name;
+
+  const circle = $(id("score-circle"));
   circle.textContent = data.score;
   circle.style.borderColor = scoreColor(data.score);
   circle.style.color = scoreColor(data.score);
 
-  $("verdict-text").textContent = data.verdict;
+  $(id("verdict-text")).textContent = data.verdict;
   let directionText = "Direction read as: " + data.direction;
   if (data.auto_trade) {
     if (data.auto_trade.placed) {
@@ -278,9 +283,9 @@ function renderResult(data) {
       directionText += ` · Auto-trade skipped: ${data.auto_trade.reason}`;
     }
   }
-  $("direction-text").textContent = directionText;
+  $(id("direction-text")).textContent = directionText;
 
-  const flagsEl = $("flags-container");
+  const flagsEl = $(id("flags-container"));
   flagsEl.innerHTML = "";
   if (!data.red_flags || data.red_flags.length === 0) {
     const d = document.createElement("div");
@@ -297,7 +302,7 @@ function renderResult(data) {
     });
   }
 
-  const tbody = document.querySelector("#breakdown-table tbody");
+  const tbody = document.querySelector(`#${id("breakdown-table")} tbody`);
   tbody.innerHTML = "";
   (data.breakdown || []).forEach(([label, pts, max, note]) => {
     const tr = document.createElement("tr");
@@ -312,7 +317,7 @@ function renderResult(data) {
   });
 
   const t = data.technicals || {};
-  $("tech-kv").innerHTML = t.available
+  $(id("tech-kv")).innerHTML = t.available
     ? `
     <div><span>Last close</span>${t.last_close}</div>
     <div><span>EMA20 / EMA50</span>${t.ema20} / ${t.ema50}</div>
@@ -327,7 +332,7 @@ function renderResult(data) {
     : `<div style="color:var(--muted)">${t.reason || "Not available."}</div>`;
 
   const o = data.options || {};
-  $("opts-kv").innerHTML = o.available
+  $(id("opts-kv")).innerHTML = o.available
     ? `
     <div><span>Expiry</span>${o.expiry}</div>
     <div><span>OI</span>${o.oi}</div>
@@ -339,7 +344,7 @@ function renderResult(data) {
     : `<div style="color:var(--muted)">${o.reason || "Not available."}</div>`;
 
   const rr = data.risk_reward || {};
-  $("rr-kv").innerHTML = rr.available
+  $(id("rr-kv")).innerHTML = rr.available
     ? `
     <div><span>Entry used</span>${rr.entry_used}</div>
     <div><span>Risk / unit</span>${rr.risk_per_unit}</div>
@@ -348,7 +353,7 @@ function renderResult(data) {
   `
     : `<div style="color:var(--muted)">${rr.reason || "Entry/SL/targets incomplete."}</div>`;
 
-  const newsEl = $("news-list");
+  const newsEl = $(id("news-list"));
   newsEl.innerHTML = "";
   const n = data.news || {};
   if (!n.available || !n.headlines || n.headlines.length === 0) {
@@ -367,6 +372,68 @@ function renderResult(data) {
   }
 }
 
+const DETAIL_MODAL_TEMPLATE = `
+  <div class="score-header">
+    <div class="score-circle" id="d-score-circle">--</div>
+    <div>
+      <div class="verdict" id="d-verdict-text"></div>
+      <div class="verdict-sub" id="d-direction-text"></div>
+    </div>
+  </div>
+  <div class="flags" id="d-flags-container"></div>
+  <h2 style="margin-top:20px">Scoring breakdown</h2>
+  <table id="d-breakdown-table">
+    <thead><tr><th>Factor</th><th>Points</th><th style="width:200px">Bar</th><th>Notes</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="two-col" style="margin-top:20px">
+    <div>
+      <h2>Technicals</h2>
+      <div class="kv" id="d-tech-kv"></div>
+    </div>
+    <div>
+      <h2>Options (best-effort)</h2>
+      <div class="kv" id="d-opts-kv"></div>
+    </div>
+  </div>
+  <h2 style="margin-top:20px">Risk / Reward</h2>
+  <div class="kv" id="d-rr-kv"></div>
+  <h2 style="margin-top:20px">Recent news</h2>
+  <div id="d-news-list"></div>
+`;
+
+// ---- Signal detail modal (used from History) ----
+async function openSignalDetail(signalId) {
+  const modal = $("detail-modal");
+  const backdrop = $("detail-modal-backdrop");
+  modal.classList.remove("hidden");
+  backdrop.classList.remove("hidden");
+  $("detail-modal-body").innerHTML = `<div style="color:var(--muted);padding:20px">Loading…</div>`;
+  $("detail-raw-text").classList.add("hidden");
+  try {
+    const res = await fetch(`/api/signals/${signalId}`);
+    if (!res.ok) throw new Error("Could not load signal detail");
+    const s = await res.json();
+    $("detail-modal-body").innerHTML = DETAIL_MODAL_TEMPLATE;
+    $("detail-modal-title").textContent =
+      `#${s.id} · ${s.resolved_symbol || s.symbol}${s.instrument !== "EQ" ? " " + s.strike + s.instrument : ""} · ${s.channel}`;
+    if (s.raw_text) {
+      $("detail-raw-text").textContent = s.raw_text;
+      $("detail-raw-text").classList.remove("hidden");
+    }
+    renderEvaluation(s.evaluation || {}, "d-");
+  } catch (e) {
+    $("detail-modal-body").innerHTML = `<div style="color:var(--red);padding:20px">Error: ${e.message}</div>`;
+  }
+}
+
+function closeSignalDetail() {
+  $("detail-modal").classList.add("hidden");
+  $("detail-modal-backdrop").classList.add("hidden");
+}
+$("detail-modal-backdrop").onclick = closeSignalDetail;
+$("btn-close-detail").onclick = closeSignalDetail;
+
 // ---- History ----
 async function loadHistory() {
   const res = await fetch("/api/signals");
@@ -375,6 +442,8 @@ async function loadHistory() {
   tbody.innerHTML = "";
   rows.forEach((s) => {
     const tr = document.createElement("tr");
+    tr.className = "history-row-clickable";
+    tr.title = "Click for full evaluation report";
     tr.innerHTML = `
       <td>${s.id}</td>
       <td>${s.source === "telegram" ? "📡" : "✍️"}</td>
@@ -392,11 +461,14 @@ async function loadHistory() {
         </select>
       </td>
     `;
+    tr.onclick = () => openSignalDetail(s.id);
     tbody.appendChild(tr);
   });
 
   document.querySelectorAll(".outcome-select").forEach((sel) => {
-    sel.onchange = async () => {
+    sel.onclick = (e) => e.stopPropagation();
+    sel.onchange = async (e) => {
+      e.stopPropagation();
       await fetch(`/api/signals/${sel.dataset.id}/outcome`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

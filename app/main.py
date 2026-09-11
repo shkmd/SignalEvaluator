@@ -137,9 +137,23 @@ class OutcomeRequest(BaseModel):
     note: Optional[str] = None
 
 
+def _asset_version() -> str:
+    """Cache-busting token derived from the static files' own mtimes. A browser that has
+    a long-lived cached copy of app.js/style.css from before a change will still fetch the
+    new one, because the URL it's referenced by has actually changed -- no reliance on the
+    browser correctly honoring cache-control headers."""
+    js_mtime = (STATIC_DIR / "app.js").stat().st_mtime
+    css_mtime = (STATIC_DIR / "style.css").stat().st_mtime
+    return str(int(max(js_mtime, css_mtime)))
+
+
 @app.get("/")
 def root():
-    return FileResponse(STATIC_DIR / "index.html")
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    v = _asset_version()
+    html = html.replace('href="/static/style.css"', f'href="/static/style.css?v={v}"')
+    html = html.replace('src="/static/app.js"', f'src="/static/app.js?v={v}"')
+    return Response(content=html, media_type="text/html")
 
 
 @app.post("/api/parse")
@@ -394,4 +408,15 @@ def disconnect_broker(broker: str, user_id: int = Depends(current_user_id)):
     return {"ok": True}
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class NoCacheStaticFiles(StaticFiles):
+    """Forces browsers to revalidate static assets on every load instead of trusting
+    heuristic freshness -- without this, a browser can silently keep serving a stale
+    app.js/style.css for a long time after a deploy, with no visible error."""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
