@@ -11,7 +11,8 @@ from typing import Optional, List
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
 from app import fo_universe, scanner
-from fastapi.responses import PlainTextResponse
+from app.brokers import kite as kite_broker
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from app.telegram_client import reset_client
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -185,7 +186,7 @@ def evaluate(req: EvaluateRequest, user_id: int = Depends(current_user_id)):
 
     direction = "bearish" if (instrument == "PE" or req.action == "sell") else "bullish"
 
-    tech = technicals.fetch_technicals(resolved_symbol, direction=direction)
+    tech = technicals.fetch_technicals(resolved_symbol, direction=direction, user_id=user_id)
     opts = options_mod.fetch_option_chain_snapshot(resolved_symbol, req.strike, instrument)
     headlines = news_mod.fetch_news(resolved_symbol)
     scr = screener.evaluate_screener(resolved_symbol, direction)
@@ -373,7 +374,7 @@ def get_orders(mode: Optional[str] = None, status: Optional[str] = None, user_id
 
 @app.post("/api/trading/orders/{order_id}/close")
 def close_order(order_id: int, user_id: int = Depends(current_user_id)):
-    result = trading.close_paper_order(user_id, order_id)
+    result = trading.close_order(user_id, order_id)
     if not result.get("closed"):
         raise HTTPException(status_code=400, detail=result.get("reason", "Could not close order"))
     return result
@@ -435,8 +436,29 @@ def refresh_fo_universe(user_id: int = Depends(current_user_id)):
     result = fo_universe.fetch_fo_universe()
     if not result["available"]:
         raise HTTPException(status_code=502, detail=result["reason"])
-    count = db.replace_fo_universe(result["stocks"] + result["indices"])
-    return {"ok": True, "stocks": len(result["stocks"]), "indices": len(result["indices"]), "total_rows": count}
+
+    stocks = result["stocks"]
+    lot_sizes_added = 0
+    try:
+        if kite_broker.has_valid_session(user_id):
+            kite_rows = {r["symbol"]: r for r in kite_broker.fetch_fo_underlyings(user_id)}
+            for s in stocks:
+                match = kite_rows.get(s["symbol"])
+                if match:
+                    s["lot_size"] = match["lot_size"]
+                    s["expiries"] = match["expiries"]
+                    lot_sizes_added += 1
+    except Exception:
+        pass  # NSE-only universe still works fine without Kite's lot sizes/expiries
+
+    count = db.replace_fo_universe(stocks + result["indices"])
+    return {
+        "ok": True,
+        "stocks": len(stocks),
+        "indices": len(result["indices"]),
+        "total_rows": count,
+        "lot_sizes_from_kite": lot_sizes_added,
+    }
 
 
 @app.post("/api/scanner/run")
@@ -514,6 +536,39 @@ def get_scanner_signal_settings(user_id: int = Depends(current_user_id)):
 @app.post("/api/scanner/signal-settings")
 def save_scanner_signal_settings(req: ScannerSignalSettingsRequest, user_id: int = Depends(current_user_id)):
     return db.save_scanner_signal_settings(user_id, req.enabled)
+
+
+class KiteCredentialsRequest(BaseModel):
+    api_key: str
+    api_secret: str
+
+
+@app.post("/api/broker/kite/credentials")
+def save_kite_credentials(req: KiteCredentialsRequest, user_id: int = Depends(current_user_id)):
+    kite_broker.save_credentials(user_id, req.api_key.strip(), req.api_secret.strip())
+    return {"ok": True}
+
+
+@app.get("/api/broker/kite/login-url")
+def kite_login_url(user_id: int = Depends(current_user_id)):
+    try:
+        return {"url": kite_broker.get_login_url(user_id)}
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/broker/kite/callback")
+def kite_callback(request_token: str, user_id: int = Depends(current_user_id)):
+    try:
+        kite_broker.handle_callback(user_id, request_token)
+    except RuntimeError as e:
+        return RedirectResponse(url=f"/?kite_error={e}")
+    return RedirectResponse(url="/?kite_connected=1")
+
+
+@app.get("/api/broker/kite/status")
+def kite_status(user_id: int = Depends(current_user_id)):
+    return kite_broker.get_status(user_id)
 
 
 app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")

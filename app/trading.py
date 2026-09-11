@@ -81,27 +81,138 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
 
 
 def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dict, settings: dict) -> dict:
-    accounts = [a for a in db.list_broker_accounts(user_id) if a["connected"]]
-    if not accounts:
-        return {"placed": False, "reason": "No broker connected -- connect one in Broker Setup first."}
-    # No broker adapter is wired up yet -- refuse rather than silently no-op or fake a fill.
-    return {
-        "placed": False,
-        "reason": f"Live order execution isn't implemented for {accounts[0]['broker']} yet. "
-        "Paper mode works end-to-end; tell me when you're ready to wire up real order "
-        "placement for this broker.",
-    }
+    """Places a REAL market order on the user's connected Zerodha account. Deliberately
+    scoped to equity signals only -- an options signal needs a contract-selection stage
+    (expiry, strike, liquidity checks) that doesn't exist yet, so it's refused with a clear
+    reason rather than guessing a strike.
+
+    Only places the entry order. SL/target are recorded on the order row for the user to
+    manage -- automatic bracket-style exit via Kite (GTT orders) isn't wired up yet, unlike
+    paper mode where monitor_open_positions() auto-closes on SL/target hit.
+    """
+    if signal.get("instrument") in ("CE", "PE"):
+        return {
+            "placed": False,
+            "reason": "Live execution is equity-only for now -- an options signal needs a "
+            "separate contract-selection stage (expiry/strike/liquidity) that isn't built yet.",
+        }
+
+    try:
+        from app.brokers import kite as kite_broker
+    except ImportError:
+        return {"placed": False, "reason": "Kite Connect adapter not available."}
+
+    if not kite_broker.has_valid_session(user_id):
+        return {
+            "placed": False,
+            "reason": "Kite Connect isn't connected or today's session has expired -- "
+            "log in again from Broker Setup.",
+        }
+
+    if settings.get("max_daily_loss"):
+        realized_today = db.daily_realized_pnl(user_id, mode="live")
+        if realized_today <= -abs(settings["max_daily_loss"]):
+            return {
+                "placed": False,
+                "reason": f"Max daily loss ({settings['max_daily_loss']}) already reached today -- live trading paused.",
+            }
+
+    resolved_symbol = signal["resolved_symbol"]
+    side = "SELL" if evaluation["direction"] == "bearish" else "BUY"
+    quantity = int(settings["quantity"])
+
+    try:
+        kite_order_id = kite_broker.place_order(
+            user_id,
+            tradingsymbol=resolved_symbol,
+            exchange="NSE",
+            transaction_type=side,
+            quantity=quantity,
+            product="MIS",
+            order_type="MARKET",
+        )
+    except Exception as e:
+        return {"placed": False, "reason": f"Kite order placement failed: {e}"}
+
+    try:
+        entry_price = kite_broker.fetch_ltp(user_id, resolved_symbol, "NSE")
+    except Exception:
+        entry_price = signal.get("entry_high") or signal.get("entry_low")
+
+    targets = signal.get("targets") or []
+    order_id = db.insert_order(
+        user_id,
+        {
+            "signal_id": signal_id,
+            "mode": "live",
+            "symbol": signal.get("symbol"),
+            "resolved_symbol": resolved_symbol,
+            "instrument": "EQ",
+            "strike": None,
+            "side": side.lower(),
+            "quantity": quantity,
+            "entry_price": entry_price,
+            "sl": signal.get("sl"),
+            "target": min(targets) if targets and side == "BUY" else (max(targets) if targets else None),
+            "broker": "zerodha",
+            "broker_order_id": kite_order_id,
+        },
+    )
+    return {"placed": True, "order_id": order_id, "mode": "live", "entry_price": entry_price, "kite_order_id": kite_order_id}
 
 
-def close_paper_order(user_id: int, order_id: int, reason: str = "manual_close") -> dict:
+def close_order(user_id: int, order_id: int, reason: str = "manual_close") -> dict:
+    """Closes an open position. For a live order this places a REAL offsetting order on
+    Kite first (e.g. SELL to close a BUY) -- it never just marks the DB row closed while
+    leaving the real position open on the broker, which would silently desync the two."""
     order = db.get_order(user_id, order_id)
     if not order or order["status"] != "open":
         return {"closed": False, "reason": "Order not found or already closed."}
+
+    if order["mode"] == "live":
+        return _close_live_order(user_id, order, reason)
 
     price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"])
     exit_price = price_info["price"] if price_info["available"] else order["entry_price"]
     pnl = _calc_pnl(order, exit_price)
     db.close_order(order_id, exit_price, reason, pnl)
+    return {"closed": True, "exit_price": exit_price, "pnl": pnl}
+
+
+def _close_live_order(user_id: int, order: dict, reason: str) -> dict:
+    try:
+        from app.brokers import kite as kite_broker
+    except ImportError:
+        return {"closed": False, "reason": "Kite Connect adapter not available."}
+
+    if not kite_broker.has_valid_session(user_id):
+        return {
+            "closed": False,
+            "reason": "Kite Connect session has expired -- log in again from Broker Setup "
+            "before closing this live position (your real position is still open on Zerodha).",
+        }
+
+    offsetting_side = "SELL" if order["side"] == "buy" else "BUY"
+    try:
+        kite_broker.place_order(
+            user_id,
+            tradingsymbol=order["resolved_symbol"],
+            exchange="NSE",
+            transaction_type=offsetting_side,
+            quantity=int(order["quantity"]),
+            product="MIS",
+            order_type="MARKET",
+        )
+    except Exception as e:
+        return {"closed": False, "reason": f"Kite offsetting order failed: {e} -- your real position is still open."}
+
+    try:
+        exit_price = kite_broker.fetch_ltp(user_id, order["resolved_symbol"], "NSE")
+    except Exception:
+        exit_price = order["entry_price"]
+
+    pnl = _calc_pnl(order, exit_price)
+    db.close_order(order["id"], exit_price, reason, pnl)
     return {"closed": True, "exit_price": exit_price, "pnl": pnl}
 
 

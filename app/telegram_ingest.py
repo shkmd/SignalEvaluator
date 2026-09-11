@@ -133,7 +133,7 @@ def _evaluate_and_store(user_id: int, parsed: dict, chat_id: int, message_id: in
         "targets": parsed.get("targets") or [],
     }
 
-    tech = technicals.fetch_technicals(resolved_symbol, direction=direction)
+    tech = technicals.fetch_technicals(resolved_symbol, direction=direction, user_id=user_id)
     opts = options_mod.fetch_option_chain_snapshot(resolved_symbol, parsed.get("strike"), instrument)
     headlines = news_mod.fetch_news(resolved_symbol)
     scr = screener.evaluate_screener(resolved_symbol, direction)

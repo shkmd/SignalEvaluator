@@ -6,6 +6,26 @@ import yfinance as yf
 NIFTY_TICKER = "^NSEI"
 
 
+def _fetch_daily_frames(symbol: str, ticker: str, user_id: int = None):
+    """Returns (stock_df, nifty_df, source). Tries the given user's Kite Connect session
+    first (real broker data); falls back to yfinance on any error or if not connected --
+    a broken/expired Kite session should degrade evaluation quality, never break it."""
+    if user_id is not None:
+        try:
+            from app.brokers import kite as kite_broker
+
+            stock_df = kite_broker.fetch_daily_candles(user_id, symbol.upper(), "NSE", days=280)
+            idx_df = kite_broker.fetch_daily_candles(user_id, "NIFTY 50", "NSE", days=280)
+            if stock_df is not None and not stock_df.empty:
+                return stock_df, idx_df, "kite"
+        except Exception:
+            pass  # fall through to yfinance
+
+    stock_df = yf.Ticker(ticker).history(period="9mo", interval="1d", auto_adjust=True)
+    idx_df = yf.Ticker(NIFTY_TICKER).history(period="9mo", interval="1d", auto_adjust=True)
+    return stock_df, idx_df, "yfinance"
+
+
 def resolve_ticker(symbol: str) -> str:
     symbol = symbol.strip().upper()
     if symbol.startswith("^") or symbol.endswith(".NS") or symbol.endswith(".BO"):
@@ -37,20 +57,19 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.ewm(alpha=1 / period, adjust=False).mean()
 
 
-def fetch_technicals(symbol: str, direction: str = "bullish") -> dict:
+def fetch_technicals(symbol: str, direction: str = "bullish", user_id: int = None) -> dict:
     ticker = resolve_ticker(symbol)
     try:
-        df = yf.Ticker(ticker).history(period="9mo", interval="1d", auto_adjust=True)
+        df, idx, source = _fetch_daily_frames(symbol, ticker, user_id)
         if df is None or df.empty or len(df) < 30:
             return {"available": False, "reason": f"No/insufficient price history for {ticker}."}
 
-        # yfinance sometimes appends a trailing row for the current session before it's
-        # fully populated (NaN OHLC) -- drop any incomplete rows so indicators never see them.
+        # Both sources can carry an incomplete trailing/current-session row (NaN OHLC) --
+        # drop it so indicators never see it.
         df = df.dropna(subset=["Close", "High", "Low", "Volume"])
         if len(df) < 30:
             return {"available": False, "reason": f"No/insufficient price history for {ticker}."}
 
-        idx = yf.Ticker(NIFTY_TICKER).history(period="9mo", interval="1d", auto_adjust=True)
         idx = idx.dropna(subset=["Close"]) if idx is not None and not idx.empty else idx
 
         close = df["Close"]
@@ -103,6 +122,7 @@ def fetch_technicals(symbol: str, direction: str = "bullish") -> dict:
         return {
             "available": True,
             "ticker": ticker,
+            "source": source,
             "last_close": round(last_close, 2),
             "ema20": round(last_ema20, 2),
             "ema50": round(last_ema50, 2),

@@ -614,8 +614,8 @@ def insert_order(user_id: int, order: dict) -> int:
             """
             INSERT INTO orders
             (user_id, created_at, signal_id, mode, symbol, resolved_symbol, instrument, strike, side,
-             quantity, entry_price, sl, target, status, broker)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+             quantity, entry_price, sl, target, status, broker, broker_order_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
             """,
             (
                 user_id,
@@ -632,6 +632,7 @@ def insert_order(user_id: int, order: dict) -> int:
                 order.get("sl"),
                 order.get("target"),
                 order.get("broker"),
+                order.get("broker_order_id"),
             ),
         )
         conn.commit()
@@ -733,6 +734,47 @@ def list_broker_accounts(user_id: int) -> list:
             "SELECT id, broker, connected, connected_at FROM broker_accounts WHERE user_id = ?", (user_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_broker_account(user_id: int, broker: str) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM broker_accounts WHERE user_id = ? AND broker = ?", (user_id, broker)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["credentials"] = json.loads(d.pop("credentials_json") or "{}")
+        return d
+    finally:
+        conn.close()
+
+
+def get_broker_account_by_user(broker: str, user_id: int = None) -> dict:
+    """Any connected account for this broker -- used by shared/global features (like the
+    F&O Scanner) that need *a* working connection, not necessarily the requester's own."""
+    conn = _conn()
+    try:
+        if user_id is not None:
+            row = conn.execute(
+                "SELECT * FROM broker_accounts WHERE broker = ? AND user_id = ? AND connected = 1", (broker, user_id)
+            ).fetchone()
+            if row:
+                d = dict(row)
+                d["credentials"] = json.loads(d.pop("credentials_json") or "{}")
+                return d
+        row = conn.execute(
+            "SELECT * FROM broker_accounts WHERE broker = ? AND connected = 1 ORDER BY connected_at DESC LIMIT 1",
+            (broker,),
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["credentials"] = json.loads(d.pop("credentials_json") or "{}")
+        return d
     finally:
         conn.close()
 

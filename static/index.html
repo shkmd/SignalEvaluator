@@ -460,10 +460,36 @@ Target 16/18/20/24/30+"></textarea>
       </div>
 
       <div class="panel">
-        <h2>Connect a broker</h2>
+        <div class="channels-header">
+          <h2 style="margin:0">Zerodha Kite Connect</h2>
+          <span id="kite-status-badge" class="badge neutral">checking…</span>
+        </div>
+        <div style="color:var(--muted);font-size:12px;margin:8px 0 14px">
+          Powers your signal evaluations, the shared F&amp;O Scanner (when you're the one who runs a
+          scan), and live order placement. Kite's access token expires every day -- you'll need to
+          click "Log in to Kite" again each trading morning; that's a Zerodha platform limitation.
+        </div>
+        <div class="grid" style="grid-template-columns: 1fr 1fr">
+          <label>API Key
+            <input id="kite-api-key" placeholder="from developers.kite.trade" />
+          </label>
+          <label>API Secret
+            <input id="kite-api-secret" type="password" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="secondary" id="btn-save-kite-credentials">Save API key/secret</button>
+          <button class="primary" id="btn-kite-login">Log in to Kite</button>
+          <span id="kite-status-text" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <div class="warnings" id="kite-warning"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Other brokers</h2>
         <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
-          Credentials are stored locally on this machine. Connecting a broker here does not yet place
-          real orders -- live order execution needs a broker-specific adapter, built once you've picked one.
+          Credentials are stored locally. These don't have a working order-placement adapter yet --
+          only Kite Connect (above) is fully wired up.
         </div>
         <div id="broker-list" class="channel-list"></div>
       </div>

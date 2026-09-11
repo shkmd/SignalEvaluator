@@ -181,7 +181,22 @@ async function refreshSidebarConn() {
 }
 setInterval(refreshSidebarConn, 30000);
 
-checkAuth();
+function handleKiteRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("kite_connected") || params.has("kite_error")) {
+    const message = params.has("kite_connected")
+      ? "Kite Connect: logged in for today."
+      : "Kite Connect login failed: " + params.get("kite_error");
+    history.replaceState({}, "", window.location.pathname);
+    setTimeout(() => {
+      showTab("broker");
+      const warnEl = $("kite-warning");
+      if (warnEl) warnEl.innerHTML = `<div style="color:${params.has("kite_error") ? "var(--red)" : "var(--green)"}">${message}</div>`;
+    }, 300);
+  }
+}
+
+checkAuth().then(handleKiteRedirect);
 
 // ---- Parse ----
 $("btn-parse").onclick = async () => {
@@ -955,16 +970,77 @@ async function loadOrderBook() {
 
 // ---- Broker Setup ----
 const BROKERS = [
-  { id: "zerodha", name: "Zerodha (Kite Connect)" },
   { id: "upstox", name: "Upstox" },
   { id: "dhan", name: "Dhan" },
   { id: "angelone", name: "Angel One (SmartAPI)" },
 ];
 
 async function loadBrokerTab() {
-  await loadAutoTradeSettings();
-  await loadBrokerList();
+  await Promise.all([loadAutoTradeSettings(), loadBrokerList(), loadKiteStatus()]);
 }
+
+async function loadKiteStatus() {
+  const badge = $("kite-status-badge");
+  const text = $("kite-status-text");
+  try {
+    const res = await fetch("/api/broker/kite/status");
+    const s = await res.json();
+    if (!s.configured) {
+      badge.className = "badge negative";
+      badge.textContent = "not configured";
+      text.textContent = "Enter your API key/secret and save.";
+    } else if (s.logged_in_today) {
+      badge.className = "badge positive";
+      badge.textContent = "logged in today";
+      text.textContent = s.kite_user_id ? `Connected as ${s.kite_user_id}.` : "Connected.";
+    } else {
+      badge.className = "badge negative";
+      badge.textContent = "login required";
+      text.textContent = "Click \"Log in to Kite\" -- today's session hasn't started yet.";
+    }
+  } catch (e) {
+    badge.className = "badge negative";
+    badge.textContent = "error";
+    text.textContent = String(e);
+  }
+}
+
+$("btn-save-kite-credentials").onclick = async () => {
+  const warnEl = $("kite-warning");
+  warnEl.innerHTML = "";
+  const api_key = $("kite-api-key").value.trim();
+  const api_secret = $("kite-api-secret").value.trim();
+  if (!api_key || !api_secret) {
+    warnEl.innerHTML = `<div>⚠ Both fields are required.</div>`;
+    return;
+  }
+  try {
+    const res = await fetch("/api/broker/kite/credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key, api_secret }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
+    $("kite-api-secret").value = "";
+    await loadKiteStatus();
+  } catch (e) {
+    warnEl.innerHTML = `<div>⚠ ${e.message}</div>`;
+  }
+};
+
+$("btn-kite-login").onclick = async () => {
+  const warnEl = $("kite-warning");
+  warnEl.innerHTML = "";
+  try {
+    const res = await fetch("/api/broker/kite/login-url");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not get login URL");
+    window.open(data.url, "_blank");
+    warnEl.innerHTML = `<div style="color:var(--muted)">Log in on the Zerodha tab that just opened, then come back here -- it'll redirect and this status will update.</div>`;
+  } catch (e) {
+    warnEl.innerHTML = `<div>⚠ ${e.message}</div>`;
+  }
+};
 
 async function loadAutoTradeSettings() {
   const res = await fetch("/api/trading/settings");
@@ -981,7 +1057,7 @@ async function loadAutoTradeSettings() {
 function updateLiveWarning() {
   const warnEl = $("at-live-warning");
   if ($("at-mode").value === "live") {
-    warnEl.innerHTML = `<div>⚠ Live mode requires a connected broker with a working order-placement adapter. None exists yet for any broker below -- live signals that clear the bar will be logged as "not placed" with a reason, not silently skipped.</div>`;
+    warnEl.innerHTML = `<div>⚠ Live mode places REAL orders on your connected Zerodha account with REAL money when a signal clears your score threshold -- no per-trade confirmation. Make sure Kite Connect below shows "logged in today" first, and that you've paper-traded this setup enough to trust it. If Kite isn't connected, live signals are logged as "not placed" with a reason, never silently skipped.</div>`;
   } else {
     warnEl.innerHTML = "";
   }

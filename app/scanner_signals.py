@@ -71,7 +71,7 @@ def _generate_one(user_id: int, result: dict, classification: str) -> int:
         "targets": [target],
     }
 
-    tech = technicals.fetch_technicals(resolved_symbol, direction=direction)
+    tech = technicals.fetch_technicals(resolved_symbol, direction=direction, user_id=user_id)
     opts = {"available": False, "reason": "No strike/instrument to look up (equity signal)."}
     headlines = news_mod.fetch_news(resolved_symbol)
     scr = screener.evaluate_screener(resolved_symbol, direction)

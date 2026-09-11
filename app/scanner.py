@@ -7,7 +7,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app import db, qualification, scanner_signals
 
-MAX_WORKERS = 8
+MAX_WORKERS_FREE_DATA = 8
+# Kite Connect's historical-data endpoint is rate-limited (~3 req/s) -- a scan powered by a
+# real Kite session needs much lower concurrency than the free yfinance path to avoid
+# tripping it mid-scan.
+MAX_WORKERS_KITE = 3
 
 
 def run_scan(triggered_by_user_id: int = None) -> dict:
@@ -28,11 +32,24 @@ def run_scan(triggered_by_user_id: int = None) -> dict:
         "conflict": 0,
     }
 
+    kite_user_id = None
+    if triggered_by_user_id is not None:
+        try:
+            from app.brokers import kite as kite_broker
+
+            if kite_broker.has_valid_session(triggered_by_user_id):
+                kite_user_id = triggered_by_user_id
+        except Exception:
+            kite_user_id = None
+
     def _scan_one(stock):
-        result = qualification.evaluate_stock(stock["resolved_symbol"], futures_eligible=bool(stock["futures_eligible"]))
+        result = qualification.evaluate_stock(
+            stock["resolved_symbol"], futures_eligible=bool(stock["futures_eligible"]), user_id=kite_user_id
+        )
         return stock, result
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+    max_workers = MAX_WORKERS_KITE if kite_user_id else MAX_WORKERS_FREE_DATA
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(_scan_one, stock) for stock in universe]
         for future in as_completed(futures):
             try:

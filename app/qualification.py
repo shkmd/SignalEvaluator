@@ -52,14 +52,45 @@ def _is_nan(x):
         return x is None
 
 
-def gather_snapshot(symbol: str) -> dict:
+def _fetch_daily(symbol: str, ticker: str, user_id: int = None):
+    """Tries the given user's Kite Connect session first; falls back to yfinance on any
+    error or if not connected. Returns (DataFrame, source)."""
+    if user_id is not None:
+        try:
+            from app.brokers import kite as kite_broker
+
+            df = kite_broker.fetch_daily_candles(user_id, symbol.upper(), "NSE", days=400)
+            if df is not None and not df.empty:
+                return df, "kite"
+        except Exception:
+            pass
+    return yf.Ticker(ticker).history(period="1y", interval="1d", auto_adjust=True), "yfinance"
+
+
+def _fetch_intraday_15m(symbol: str, ticker: str, user_id: int = None, source: str = "yfinance"):
+    if source == "kite" and user_id is not None:
+        try:
+            from app.brokers import kite as kite_broker
+
+            df = kite_broker.fetch_intraday_candles(user_id, symbol.upper(), "NSE", "15minute", days=5)
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            pass
+    try:
+        return yf.Ticker(ticker).history(period="5d", interval="15m", auto_adjust=True)
+    except Exception:
+        return None
+
+
+def gather_snapshot(symbol: str, user_id: int = None) -> dict:
     """Fetches everything the qualification engine needs for one stock. Raises
     DataUnavailable with a specific, displayable reason rather than ever returning
     zeros/nulls in place of missing data."""
     ticker = resolve_ticker(symbol)
 
     try:
-        daily = yf.Ticker(ticker).history(period="1y", interval="1d", auto_adjust=True)
+        daily, daily_source = _fetch_daily(symbol, ticker, user_id)
     except Exception as e:
         raise DataUnavailable(f"Daily data fetch failed: {e}")
 
@@ -132,11 +163,8 @@ def gather_snapshot(symbol: str) -> dict:
     weekly_provisional = True  # the current week is, by definition, never complete intraday
     monthly_provisional = True  # same for the current month
 
-    try:
-        intraday = yf.Ticker(ticker).history(period="5d", interval="15m", auto_adjust=True)
-        intraday = intraday.dropna(subset=["Close"]) if intraday is not None else None
-    except Exception:
-        intraday = None
+    intraday = _fetch_intraday_15m(symbol, ticker, user_id, daily_source)
+    intraday = intraday.dropna(subset=["Close"]) if intraday is not None else None
     if intraday is None or intraday.empty:
         raise DataUnavailable("15-minute candle data unavailable.")
 
@@ -168,6 +196,7 @@ def gather_snapshot(symbol: str) -> dict:
         "latest_completed_15m_close": latest_completed_15m_close,
         "latest_15m_timestamp": latest_15m_timestamp,
         "data_timestamp": datetime.now(IST).isoformat(),
+        "data_source": daily_source,
     }
 
 
@@ -281,7 +310,7 @@ def classify(ce_result: dict, pe_result: dict, near_qualified_max_failures: int 
     return {"classification": "NOT_QUALIFIED"}
 
 
-def evaluate_stock(symbol: str, futures_eligible: bool = True) -> dict:
+def evaluate_stock(symbol: str, futures_eligible: bool = True, user_id: int = None) -> dict:
     """Full pipeline for one stock: fetch snapshot, evaluate CE + PE, classify.
     Never raises for a data problem -- returns a DATA_UNAVAILABLE result instead."""
     if not futures_eligible:
@@ -292,7 +321,7 @@ def evaluate_stock(symbol: str, futures_eligible: bool = True) -> dict:
         }
 
     try:
-        snapshot = gather_snapshot(symbol)
+        snapshot = gather_snapshot(symbol, user_id=user_id)
     except DataUnavailable as e:
         return {"symbol": symbol, "classification": "DATA_UNAVAILABLE", "error_reason": e.reason}
 

@@ -8,3 +8,4 @@ feedparser==6.0.11
 python-multipart==0.0.9
 telethon==1.36.0
 email-validator==2.2.0
+kiteconnect==5.2.1
