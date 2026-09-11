@@ -592,4 +592,15 @@ def save_telegram_broadcast_settings(req: TelegramBroadcastSettingsRequest, user
     )
 
 
+@app.post("/api/telegram/broadcast-test")
+async def send_broadcast_test(user_id: int = Depends(current_user_id)):
+    try:
+        result = await telegram_broadcast.send_test_message(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not result.get("sent"):
+        raise HTTPException(status_code=400, detail=result.get("reason", "Send failed"))
+    return result
+
+
 app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")

@@ -93,3 +93,31 @@ def maybe_broadcast(user_id: int, signal: dict, evaluation: dict, signal_id: int
             print(f"[broadcast] user {user_id}: send failed for signal #{signal_id}: {e}")
 
     asyncio.run_coroutine_threadsafe(_send(), client.loop)
+
+
+async def send_test_message(user_id: int) -> dict:
+    """Awaitable, meant to be called directly from an async FastAPI endpoint (already on
+    the same event loop as the user's Telethon client) -- no thread-hop needed, unlike
+    maybe_broadcast(). Ignores the score gate; always sends, clearly labeled as a test."""
+    settings = db.get_telegram_broadcast_settings(user_id)
+    if not settings.get("enabled") or not settings.get("target_chat_id"):
+        return {"sent": False, "reason": "Broadcast isn't enabled or no target channel is set -- configure it first."}
+
+    test_signal = {
+        "resolved_symbol": "TEST", "instrument": "EQ",
+        "entry_low": 100, "entry_high": 100, "sl": 95, "targets": [110],
+        "signal_type": "positional",
+    }
+    test_evaluation = {"score": 100, "verdict": "Test message -- please ignore"}
+    text = "\U0001F9EA TEST MESSAGE -- verifying broadcast setup, please ignore\n\n" + format_signal_message(
+        test_signal, test_evaluation
+    )
+
+    client = get_client(user_id)
+    if not client.is_connected():
+        await client.connect()
+    if not await client.is_user_authorized():
+        return {"sent": False, "reason": "Telegram session isn't logged in -- log in again from the Telegram tab."}
+
+    await client.send_message(settings["target_chat_id"], text)
+    return {"sent": True, "target": settings.get("target_chat_title"), "text": text}

@@ -676,6 +676,23 @@ $("btn-save-broadcast-settings").onclick = async () => {
   }
 };
 
+$("btn-send-broadcast-test").onclick = async () => {
+  const statusEl = $("broadcast-settings-status");
+  const btn = $("btn-send-broadcast-test");
+  btn.disabled = true;
+  statusEl.textContent = "Sending test message…";
+  try {
+    const res = await fetch("/api/telegram/broadcast-test", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Send failed");
+    statusEl.textContent = `Sent to ${data.target}. Check the channel.`;
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 async function refreshTelegramStatus() {
   const badge = $("telegram-status-badge");
   const text = $("telegram-status-text");
