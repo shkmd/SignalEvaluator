@@ -21,6 +21,26 @@ STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(title="Signal Evaluator")
 
+# This service has two live domains pointing at the same deployment: the custom domain below,
+# and Railway's own auto-generated subdomain (kept active as a fallback). They're different
+# origins to a browser -- a session cookie set on one is never sent to the other. Anyone who
+# lands on the Railway subdomain (an old bookmark/shared link from before the custom domain
+# existed, browser autocomplete, etc.) would see a fresh login screen even while genuinely
+# logged in on the real domain, which looks exactly like "sometimes refreshing logs me out."
+# Redirecting closes that off structurally instead of relying on nobody ever using the old URL.
+CANONICAL_HOST = "sa.deployandtest.com"
+FALLBACK_HOSTS = {"signalanalyser-production.up.railway.app"}
+
+
+@app.middleware("http")
+async def redirect_to_canonical_host(request: Request, call_next):
+    host = request.headers.get("host", "").split(":")[0]
+    if host in FALLBACK_HOSTS:
+        url = request.url.replace(scheme="https", hostname=CANONICAL_HOST)
+        return RedirectResponse(url=str(url), status_code=308)
+    return await call_next(request)
+
+
 _monitor_task = None
 
 
