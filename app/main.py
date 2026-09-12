@@ -1,5 +1,6 @@
 import asyncio
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Depends, Request, Response
@@ -113,7 +114,30 @@ def logout(request: Request, response: Response):
 
 @app.get("/api/me")
 def me(user: dict = Depends(auth.require_user)):
-    return {"id": user["id"], "email": user["email"], "email_verified": bool(user["email_verified"])}
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "email_verified": bool(user["email_verified"]),
+        "created_at": user["created_at"],
+    }
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/api/auth/change-password")
+def change_password(req: ChangePasswordRequest, request: Request, user: dict = Depends(auth.require_user)):
+    if not auth.verify_password(req.current_password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+
+    db.update_password_hash(user["id"], auth.hash_password(req.new_password))
+    current_token = request.cookies.get(auth.SESSION_COOKIE)
+    signed_out = db.delete_all_sessions_for_user(user["id"], except_token=current_token)
+    return {"ok": True, "other_sessions_signed_out": signed_out}
 
 
 class ParseRequest(BaseModel):
@@ -156,7 +180,10 @@ def root():
     v = _asset_version()
     html = html.replace('href="/static/style.css"', f'href="/static/style.css?v={v}"')
     html = html.replace('src="/static/app.js"', f'src="/static/app.js?v={v}"')
-    return Response(content=html, media_type="text/html")
+    # Never let a browser/proxy cache the app shell itself -- a stale copy would still run
+    # checkAuth() correctly, but "no-store" rules it out entirely as a source of confusion
+    # after a refresh or a deploy.
+    return Response(content=html, media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/parse")
@@ -468,12 +495,25 @@ def refresh_fo_universe(user_id: int = Depends(current_user_id)):
                 s["expiries"] = match["expiries"]
                 lot_sizes_added += 1
 
+    # NSE's own universe endpoint doesn't include sector -- yfinance's per-symbol .get_info()
+    # does, but it's one of yfinance's slower calls, so it's threaded like the scan itself
+    # rather than done inline one at a time.
+    sectors_added = 0
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        sectors = dict(zip((s["symbol"] for s in stocks), pool.map(lambda s: stock_score.fetch_sector(s["resolved_symbol"]), stocks)))
+    for s in stocks:
+        sector = sectors.get(s["symbol"])
+        if sector:
+            s["sector"] = sector
+            sectors_added += 1
+
     count = db.replace_fo_universe(stocks + result["indices"])
     return {
         "ok": True,
         "stocks": len(stocks),
         "indices": len(result["indices"]),
         "total_rows": count,
+        "sectors_added": sectors_added,
         "lot_sizes_added": lot_sizes_added,
     }
 

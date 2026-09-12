@@ -11,7 +11,7 @@ import asyncio
 from datetime import datetime
 
 from app import db
-from app.telegram_client import get_client
+from app.telegram_client import get_client, get_active_loop
 
 MONTH_ABBR = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 
@@ -79,8 +79,14 @@ def maybe_broadcast(user_id: int, signal: dict, evaluation: dict, signal_id: int
         print(f"[broadcast] user {user_id}: no Telegram client available: {e}")
         return
 
-    if client.loop is None:
-        print(f"[broadcast] user {user_id}: Telegram client has no event loop -- not connected yet.")
+    # Deliberately not client.loop: Telethon's own .loop property always calls
+    # asyncio.get_running_loop() fresh (see telegram_client.py's _active_loops comment), which
+    # raises when read from a thread with no running loop -- exactly the scanner's worker
+    # threads calling this function. get_active_loop() is the loop actually recorded when this
+    # user's client connected, on the main event loop, regardless of what thread we're on now.
+    loop = get_active_loop(user_id)
+    if loop is None:
+        print(f"[broadcast] user {user_id}: Telegram client has no active loop -- not connected yet.")
         return
 
     async def _send():
@@ -92,7 +98,7 @@ def maybe_broadcast(user_id: int, signal: dict, evaluation: dict, signal_id: int
         except Exception as e:
             print(f"[broadcast] user {user_id}: send failed for signal #{signal_id}: {e}")
 
-    asyncio.run_coroutine_threadsafe(_send(), client.loop)
+    asyncio.run_coroutine_threadsafe(_send(), loop)
 
 
 async def send_test_message(user_id: int) -> dict:

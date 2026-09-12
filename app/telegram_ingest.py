@@ -8,7 +8,7 @@ from telethon import events
 from app import db, scoring, trading, screener, stock_score, telegram_broadcast
 from app import parser as signal_parser
 from app import technicals, options as options_mod, news as news_mod
-from app.telegram_client import get_client
+from app.telegram_client import get_client, register_active_loop
 
 _handler_registered_users: set[int] = set()
 
@@ -17,6 +17,7 @@ async def start_listener(user_id: int) -> bool:
     client = get_client(user_id)
     if not client.is_connected():
         await client.connect()
+    register_active_loop(user_id, asyncio.get_running_loop())
 
     if not await client.is_user_authorized():
         print(f"[telegram] user {user_id}: not logged in yet.")

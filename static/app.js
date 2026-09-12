@@ -98,6 +98,7 @@ const tabs = {
   positions: { btn: $("tab-positions"), view: $("view-positions"), title: "Positions" },
   orderbook: { btn: $("tab-orderbook"), view: $("view-orderbook"), title: "Order Book" },
   broker: { btn: $("tab-broker"), view: $("view-broker"), title: "Broker Setup" },
+  profile: { btn: $("tab-profile"), view: $("view-profile"), title: "Profile" },
 };
 function showTab(name) {
   Object.entries(tabs).forEach(([k, t]) => {
@@ -111,6 +112,7 @@ function showTab(name) {
   if (name === "positions") loadPositions();
   if (name === "orderbook") loadOrderBook();
   if (name === "broker") loadBrokerTab();
+  if (name === "profile") loadProfileTab();
   if (name === "scanner") loadScannerTab();
   if (name === "strategy") loadStrategyTab();
   if (name === "backtest") loadBacktestTab();
@@ -1530,8 +1532,74 @@ async function disconnectBroker(brokerId) {
   loadBrokerList();
 }
 
+// ---- Profile ----
+async function loadProfileTab() {
+  const kv = $("profile-account-kv");
+  kv.innerHTML = `<div><span>Email</span>…</div>`;
+  try {
+    const res = await fetch("/api/me");
+    const me = await res.json();
+    const memberSince = me.created_at ? new Date(me.created_at).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" }) : "-";
+    kv.innerHTML = `
+      <div><span>Email</span>${me.email}</div>
+      <div><span>Member since</span>${memberSince}</div>
+      <div><span>Account ID</span>${me.id}</div>
+    `;
+  } catch (e) {
+    kv.innerHTML = `<div style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+  $("profile-current-password").value = "";
+  $("profile-new-password").value = "";
+  $("profile-confirm-password").value = "";
+  $("profile-password-status").textContent = "";
+}
+
+$("btn-change-password").onclick = async () => {
+  const statusEl = $("profile-password-status");
+  const current_password = $("profile-current-password").value;
+  const new_password = $("profile-new-password").value;
+  const confirm_password = $("profile-confirm-password").value;
+
+  if (!current_password || !new_password) {
+    statusEl.textContent = "Fill in both your current and new password.";
+    return;
+  }
+  if (new_password.length < 8) {
+    statusEl.textContent = "New password must be at least 8 characters.";
+    return;
+  }
+  if (new_password !== confirm_password) {
+    statusEl.textContent = "New password and confirmation don't match.";
+    return;
+  }
+
+  const btn = $("btn-change-password");
+  btn.disabled = true;
+  statusEl.textContent = "Updating…";
+  try {
+    const res = await fetch("/api/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password, new_password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not update password");
+    $("profile-current-password").value = "";
+    $("profile-new-password").value = "";
+    $("profile-confirm-password").value = "";
+    statusEl.textContent = data.other_sessions_signed_out
+      ? `Password updated. Signed out of ${data.other_sessions_signed_out} other session(s).`
+      : "Password updated.";
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 // ---- F&O Scanner ----
 let _scannerFilter = "ALL";
+let _scannerSectorFilter = "";
 let _scannerLatestRunId = null;
 let _scannerStrategyId = "";
 
@@ -1539,6 +1607,7 @@ async function loadScannerTab() {
   await Promise.all([
     refreshScannerUniverseCount(),
     populateScannerStrategySelect(),
+    populateScannerSectorSelect(),
     loadLatestScanSummary(),
     loadScannerSignalSettings(),
   ]);
@@ -1846,8 +1915,10 @@ $("btn-refresh-universe").onclick = async () => {
     const res = await fetch("/api/scanner/universe/refresh", { method: "POST" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Refresh failed");
-    statusEl.textContent = `Universe refreshed: ${data.stocks} stocks, ${data.indices} indices.`;
+    statusEl.textContent = `Universe refreshed: ${data.stocks} stocks, ${data.indices} indices` +
+      (data.sectors_added ? `, ${data.sectors_added} sector(s) tagged.` : ".");
     refreshScannerUniverseCount();
+    populateScannerSectorSelect();
   } catch (e) {
     statusEl.textContent = "Error: " + e.message;
   }
@@ -1928,6 +1999,10 @@ document.querySelectorAll(".filter-tab").forEach((btn) => {
   };
 });
 
+function applySectorFilter(rows) {
+  return _scannerSectorFilter ? rows.filter((r) => r.sector === _scannerSectorFilter) : rows;
+}
+
 async function loadScannerResults() {
   if (!_scannerLatestRunId) return;
   let url = `/api/scanner/results?run_id=${_scannerLatestRunId}`;
@@ -1938,14 +2013,33 @@ async function loadScannerResults() {
       fetch(`${url}&classification=NEAR_PE`),
     ]);
     const rows = [...(await ceRes.json()), ...(await peRes.json())];
-    renderScannerResultsTable(rows);
+    renderScannerResultsTable(applySectorFilter(rows));
     return;
   }
   if (_scannerFilter !== "ALL") url += `&classification=${_scannerFilter}`;
   const res = await fetch(url);
   const rows = await res.json();
-  renderScannerResultsTable(rows);
+  renderScannerResultsTable(applySectorFilter(rows));
 }
+
+async function populateScannerSectorSelect() {
+  const sel = $("sel-scanner-sector");
+  try {
+    const res = await fetch("/api/scanner/universe");
+    const universe = await res.json();
+    const sectors = [...new Set(universe.map((s) => s.sector).filter(Boolean))].sort();
+    const prev = sel.value;
+    sel.innerHTML = `<option value="">All sectors</option>` + sectors.map((s) => `<option value="${s}">${s}</option>`).join("");
+    sel.value = sectors.includes(prev) ? prev : "";
+  } catch (e) {
+    // leave just "All sectors"
+  }
+}
+
+$("sel-scanner-sector").onchange = () => {
+  _scannerSectorFilter = $("sel-scanner-sector").value;
+  loadScannerResults();
+};
 
 function dirBadge(classification) {
   if (classification === "CE_QUALIFIED") return `<span class="dir-badge ce">CE</span>`;

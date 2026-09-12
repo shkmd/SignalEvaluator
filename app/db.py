@@ -361,6 +361,28 @@ def verify_user_email(user_id: int) -> None:
         conn.close()
 
 
+def update_password_hash(user_id: int, password_hash: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_all_sessions_for_user(user_id: int, except_token: str = None) -> int:
+    conn = _conn()
+    try:
+        if except_token:
+            cur = conn.execute("DELETE FROM sessions WHERE user_id = ? AND token != ?", (user_id, except_token))
+        else:
+            cur = conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
 def create_session(token: str, user_id: int, expires_at: str) -> None:
     conn = _conn()
     try:

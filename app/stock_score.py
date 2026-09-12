@@ -39,6 +39,17 @@ def market_cap_tier(market_cap: float) -> str:
     return "small-cap"
 
 
+def fetch_sector(resolved_symbol: str) -> str:
+    """Just the sector label -- lighter than evaluate_stock_context (no market-cap or
+    sector-strength history fetch), for bulk enrichment like tagging the whole F&O universe
+    where only the label is needed."""
+    ticker = resolve_ticker(resolved_symbol)
+    try:
+        return yf.Ticker(ticker).get_info().get("sector")
+    except Exception:
+        return None
+
+
 def evaluate_stock_context(resolved_symbol: str) -> dict:
     ticker = resolve_ticker(resolved_symbol)
     try:
