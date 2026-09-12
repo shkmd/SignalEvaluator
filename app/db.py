@@ -185,6 +185,52 @@ CREATE TABLE IF NOT EXISTS scanner_results (
 CREATE INDEX IF NOT EXISTS idx_scanner_results_run ON scanner_results(scan_run_id);
 CREATE INDEX IF NOT EXISTS idx_scanner_results_classification ON scanner_results(scan_run_id, classification);
 
+-- Backtests are per-user (a personal analysis exercise), unlike the shared/global scanner
+-- tables above -- each user's own runs, over whatever symbols/date range they chose.
+CREATE TABLE IF NOT EXISTS backtest_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    strategy_id TEXT NOT NULL,
+    symbols_json TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    max_hold_days INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    symbols_scanned INTEGER,
+    total_trades INTEGER,
+    wins INTEGER,
+    losses INTEGER,
+    time_exits INTEGER,
+    win_rate REAL,
+    avg_return_pct REAL,
+    avg_win_pct REAL,
+    avg_loss_pct REAL,
+    profit_factor REAL,
+    errors_json TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_backtest_runs_user ON backtest_runs(user_id);
+
+CREATE TABLE IF NOT EXISTS backtest_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    backtest_run_id INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    entry_date TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    sl REAL NOT NULL,
+    target REAL NOT NULL,
+    exit_date TEXT,
+    exit_price REAL,
+    exit_reason TEXT,
+    return_pct REAL,
+    hold_days INTEGER,
+    FOREIGN KEY (backtest_run_id) REFERENCES backtest_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_backtest_trades_run ON backtest_trades(backtest_run_id);
+
 CREATE TABLE IF NOT EXISTS scanner_signal_settings (
     user_id INTEGER PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 0,
@@ -1089,6 +1135,145 @@ def get_scanner_result(scan_run_id: int, symbol: str) -> dict:
             "SELECT * FROM scanner_results WHERE scan_run_id = ? AND symbol = ?", (scan_run_id, symbol)
         ).fetchone()
         return _scanner_result_to_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_backtest_run(
+    user_id: int, strategy_id: str, symbols: list, start_date: str, end_date: str, max_hold_days: int
+) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO backtest_runs
+            (user_id, strategy_id, symbols_json, start_date, end_date, max_hold_days, created_at, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'running')
+            """,
+            (user_id, strategy_id, json.dumps(symbols), start_date, end_date, max_hold_days,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def finish_backtest_run(backtest_run_id: int, stats: dict) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            UPDATE backtest_runs SET
+                completed_at = ?, status = 'completed', symbols_scanned = ?, total_trades = ?,
+                wins = ?, losses = ?, time_exits = ?, win_rate = ?, avg_return_pct = ?,
+                avg_win_pct = ?, avg_loss_pct = ?, profit_factor = ?, errors_json = ?
+            WHERE id = ?
+            """,
+            (
+                datetime.now(timezone.utc).isoformat(),
+                stats.get("symbols_scanned"),
+                stats.get("total_trades"),
+                stats.get("wins"),
+                stats.get("losses"),
+                stats.get("time_exits"),
+                stats.get("win_rate"),
+                stats.get("avg_return_pct"),
+                stats.get("avg_win_pct"),
+                stats.get("avg_loss_pct"),
+                stats.get("profit_factor"),
+                json.dumps(stats.get("errors") or {}),
+                backtest_run_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def fail_backtest_run(backtest_run_id: int, reason: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE backtest_runs SET completed_at = ?, status = 'failed', errors_json = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), json.dumps({"_run": reason}), backtest_run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_backtest_trade(backtest_run_id: int, trade: dict) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO backtest_trades
+            (backtest_run_id, symbol, direction, entry_date, entry_price, sl, target,
+             exit_date, exit_price, exit_reason, return_pct, hold_days)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                backtest_run_id,
+                trade["symbol"],
+                trade["direction"],
+                trade["entry_date"],
+                trade["entry_price"],
+                trade["sl"],
+                trade["target"],
+                trade.get("exit_date"),
+                trade.get("exit_price"),
+                trade.get("exit_reason"),
+                trade.get("return_pct"),
+                trade.get("hold_days"),
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_backtest_trades(backtest_run_id: int) -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM backtest_trades WHERE backtest_run_id = ? ORDER BY entry_date, id", (backtest_run_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_backtest_runs(user_id: int, limit: int = 20) -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM backtest_runs WHERE user_id = ? ORDER BY id DESC LIMIT ?", (user_id, limit)
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["symbols"] = json.loads(d.pop("symbols_json") or "[]")
+            d["errors"] = json.loads(d.pop("errors_json") or "{}")
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+def get_backtest_run(user_id: int, backtest_run_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM backtest_runs WHERE id = ? AND user_id = ?", (backtest_run_id, user_id)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["symbols"] = json.loads(d.pop("symbols_json") or "[]")
+        d["errors"] = json.loads(d.pop("errors_json") or "{}")
+        return d
     finally:
         conn.close()
 

@@ -90,6 +90,7 @@ const tabs = {
   dashboard: { btn: $("tab-dashboard"), view: $("view-dashboard"), title: "Dashboard" },
   scanner: { btn: $("tab-scanner"), view: $("view-scanner"), title: "F&O Directional Scanner" },
   strategy: { btn: $("tab-strategy"), view: $("view-strategy"), title: "Strategy" },
+  backtest: { btn: $("tab-backtest"), view: $("view-backtest"), title: "Backtest" },
   evaluate: { btn: $("tab-evaluate"), view: $("view-evaluate"), title: "Evaluate Signal" },
   history: { btn: $("tab-history"), view: $("view-history"), title: "Signal History" },
   stats: { btn: $("tab-stats"), view: $("view-stats"), title: "Channel Stats" },
@@ -112,6 +113,7 @@ function showTab(name) {
   if (name === "broker") loadBrokerTab();
   if (name === "scanner") loadScannerTab();
   if (name === "strategy") loadStrategyTab();
+  if (name === "backtest") loadBacktestTab();
   if (name === "dashboard") loadDashboard();
 }
 Object.entries(tabs).forEach(([name, t]) => (t.btn.onclick = () => showTab(name)));
@@ -1606,6 +1608,162 @@ async function loadStrategyTab() {
   } catch (e) {
     container.innerHTML = `<div style="color:var(--red);padding:16px 4px">Error: ${e.message}</div>`;
   }
+}
+
+// ---- Backtest tab ----
+let _backtestInitialized = false;
+
+async function loadBacktestTab() {
+  if (!_backtestInitialized) {
+    _backtestInitialized = true;
+    const today = new Date();
+    const oneYearAgo = new Date(today);
+    oneYearAgo.setFullYear(today.getFullYear() - 1);
+    $("bt-end-date").value = today.toISOString().slice(0, 10);
+    $("bt-start-date").value = oneYearAgo.toISOString().slice(0, 10);
+
+    $("bt-full-universe").onchange = () => {
+      $("bt-symbols-row").classList.toggle("hidden", $("bt-full-universe").checked);
+    };
+  }
+
+  try {
+    const res = await fetch("/api/strategies");
+    const list = await res.json();
+    const sel = $("bt-strategy");
+    const prev = sel.value;
+    sel.innerHTML = list.map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
+    if (list.some((s) => s.id === prev)) sel.value = prev;
+  } catch (e) {
+    // leave the select empty
+  }
+
+  await loadBacktestRunsList();
+}
+
+$("btn-run-backtest").onclick = async () => {
+  const statusEl = $("bt-status");
+  const btn = $("btn-run-backtest");
+  const strategy_id = $("bt-strategy").value;
+  const start_date = $("bt-start-date").value;
+  const end_date = $("bt-end-date").value;
+  const max_hold_days = parseInt($("bt-max-hold").value, 10) || 20;
+  if (!strategy_id || !start_date || !end_date) {
+    statusEl.textContent = "Pick a strategy and date range first.";
+    return;
+  }
+
+  const payload = { strategy_id, start_date, end_date, max_hold_days };
+  if (!$("bt-full-universe").checked) {
+    const symbols = $("bt-symbols").value.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!symbols.length) {
+      statusEl.textContent = "Enter at least one symbol, or check \"Full F&O universe\".";
+      return;
+    }
+    payload.symbols = symbols;
+  }
+
+  btn.disabled = true;
+  statusEl.textContent = "Running backtest… this can take a while over the full universe or a long date range.";
+  $("bt-summary-panel").classList.add("hidden");
+  $("bt-trades-panel").classList.add("hidden");
+  try {
+    const res = await fetch("/api/backtest/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Backtest failed");
+    statusEl.textContent = `Done: ${data.total_trades} trade(s) across ${data.symbols_scanned} symbol(s).` +
+      (Object.keys(data.errors || {}).length ? ` (${Object.keys(data.errors).length} symbol(s) had no usable data.)` : "");
+    renderBacktestSummary(data);
+    await loadBacktestTrades(data.backtest_run_id);
+    await loadBacktestRunsList();
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+function renderBacktestSummary(stats) {
+  const panel = $("bt-summary-panel");
+  panel.classList.remove("hidden");
+  const tiles = [
+    ["Total trades", stats.total_trades],
+    ["Win rate", stats.win_rate != null ? stats.win_rate + "%" : "-"],
+    ["Avg return / trade", stats.avg_return_pct != null ? stats.avg_return_pct + "%" : "-"],
+    ["Avg win", stats.avg_win_pct != null ? "+" + stats.avg_win_pct + "%" : "-"],
+    ["Avg loss", stats.avg_loss_pct != null ? stats.avg_loss_pct + "%" : "-"],
+    ["Profit factor", stats.profit_factor ?? "-"],
+    ["Wins / Losses", `${stats.wins} / ${stats.losses}`],
+    ["Time exits", stats.time_exits],
+  ];
+  $("bt-summary-grid").innerHTML = tiles
+    .map(([label, value]) => `<div class="summary-tile"><div class="tile-value">${value}</div><div class="tile-label">${label}</div></div>`)
+    .join("");
+}
+
+async function loadBacktestTrades(backtestRunId) {
+  const res = await fetch(`/api/backtest/runs/${backtestRunId}/trades`);
+  const trades = await res.json();
+  const panel = $("bt-trades-panel");
+  const tbody = document.querySelector("#bt-trades-table tbody");
+  if (!trades.length) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  tbody.innerHTML = trades
+    .map((t) => {
+      const returnCls = t.return_pct > 0 ? "text-up" : t.return_pct < 0 ? "text-down" : "";
+      const reasonCls = t.exit_reason === "target_hit" ? "tag-strong" : t.exit_reason === "sl_hit" ? "tag-weak" : "tag-moderate";
+      return `<tr>
+        <td>${t.symbol}</td>
+        <td>${t.direction}</td>
+        <td>${t.entry_date}</td>
+        <td>${t.entry_price}</td>
+        <td>${t.exit_date ?? "-"}</td>
+        <td>${t.exit_price ?? "-"}</td>
+        <td><span class="tag ${reasonCls}">${(t.exit_reason || "-").replace("_", " ")}</span></td>
+        <td class="${returnCls}" style="font-weight:600">${t.return_pct != null ? (t.return_pct > 0 ? "+" : "") + t.return_pct + "%" : "-"}</td>
+        <td>${t.hold_days ?? "-"}</td>
+      </tr>`;
+    })
+    .join("");
+}
+
+async function loadBacktestRunsList() {
+  const res = await fetch("/api/backtest/runs");
+  const runs = await res.json();
+  const tbody = document.querySelector("#bt-runs-table tbody");
+  if (!runs.length) {
+    tbody.innerHTML = `<tr><td colspan="8" style="color:var(--muted)">No backtests yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = runs
+    .map(
+      (r) => `
+    <tr class="history-row-clickable" data-run-id="${r.id}">
+      <td>${r.id}</td>
+      <td>${r.strategy_id}</td>
+      <td>${r.start_date} → ${r.end_date}</td>
+      <td>${r.symbols.length}</td>
+      <td>${r.total_trades ?? "-"}</td>
+      <td>${r.win_rate != null ? r.win_rate + "%" : "-"}</td>
+      <td>${r.avg_return_pct != null ? r.avg_return_pct + "%" : "-"}</td>
+      <td>${r.status}</td>
+    </tr>`
+    )
+    .join("");
+  tbody.querySelectorAll("tr[data-run-id]").forEach((tr) => {
+    tr.onclick = async () => {
+      const run = runs.find((r) => String(r.id) === tr.dataset.runId);
+      if (run) renderBacktestSummary(run);
+      await loadBacktestTrades(tr.dataset.runId);
+    };
+  });
 }
 
 async function loadScannerSignalSettings() {

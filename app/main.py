@@ -10,7 +10,7 @@ from typing import Optional, List
 
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
-from app import fo_universe, scanner, telegram_broadcast, strategies as strategies_mod
+from app import fo_universe, scanner, telegram_broadcast, strategies as strategies_mod, backtest as backtest_mod
 from app.brokers import kite as kite_broker, upstox as upstox_broker, dhan as dhan_broker
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from app.telegram_client import reset_client
@@ -534,6 +534,54 @@ def save_strategy_setting(req: StrategySettingRequest, user_id: int = Depends(cu
     db.save_user_strategy_setting(user_id, req.strategy_id, req.enabled)
     all_ids = [s["id"] for s in strategies_mod.list_strategies()]
     return db.get_user_strategy_settings(user_id, all_ids)
+
+
+class BacktestRunRequest(BaseModel):
+    strategy_id: str
+    symbols: Optional[List[str]] = None  # None/empty -- full F&O universe
+    start_date: str
+    end_date: str
+    max_hold_days: int = backtest_mod.DEFAULT_MAX_HOLD_DAYS
+
+
+@app.post("/api/backtest/run")
+def run_backtest(req: BacktestRunRequest, user_id: int = Depends(current_user_id)):
+    if not strategies_mod.is_valid_strategy_id(req.strategy_id):
+        raise HTTPException(status_code=400, detail=f"Unknown strategy '{req.strategy_id}'.")
+
+    symbols = [s.strip().upper() for s in req.symbols] if req.symbols else None
+    if not symbols:
+        symbols = [s["symbol"] for s in db.list_fo_universe(include_indices=False)]
+        if not symbols:
+            raise HTTPException(status_code=400, detail="F&O universe is empty -- refresh it first (Scanner tab).")
+
+    try:
+        return backtest_mod.run_backtest(
+            user_id, req.strategy_id, symbols, req.start_date, req.end_date, req.max_hold_days
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/backtest/runs")
+def list_backtest_runs(limit: int = 20, user_id: int = Depends(current_user_id)):
+    return db.list_backtest_runs(user_id, limit=limit)
+
+
+@app.get("/api/backtest/runs/{backtest_run_id}")
+def get_backtest_run(backtest_run_id: int, user_id: int = Depends(current_user_id)):
+    run = db.get_backtest_run(user_id, backtest_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Backtest run not found.")
+    return run
+
+
+@app.get("/api/backtest/runs/{backtest_run_id}/trades")
+def get_backtest_trades(backtest_run_id: int, user_id: int = Depends(current_user_id)):
+    run = db.get_backtest_run(user_id, backtest_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Backtest run not found.")
+    return db.list_backtest_trades(backtest_run_id)
 
 
 @app.get("/api/scanner/results")

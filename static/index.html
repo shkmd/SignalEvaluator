@@ -70,6 +70,10 @@
           <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
           Strategy
         </button>
+        <button id="tab-backtest" class="nav-item">
+          <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l4-5 3 3 5-7"/></svg></span>
+          Backtest
+        </button>
         <button id="tab-evaluate" class="nav-item">
           <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg></span>
           Evaluate
@@ -222,6 +226,80 @@
       </div>
       <div class="panel">
         <div id="strategy-list"></div>
+      </div>
+    </section>
+
+    <!-- BACKTEST TAB -->
+    <section id="view-backtest" class="hidden">
+      <div class="panel">
+        <h2>Backtest a Strategy</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+          Simulates the strategy's conditions day-by-day over historical daily candles and
+          tracks each qualification as an equity trade (closing-price entry, day's low/high stop,
+          2:1 target) until it hits SL, hits target, or the max hold period expires. Two things
+          to know: it's <strong>equity-only</strong> (no reliable free historical option-pricing
+          data exists to simulate the ATM contract the live scanner would pick), and the
+          15-minute confirmation condition is <strong>approximated</strong> using the day's own
+          close vs the previous day's close, since free intraday history only goes back ~60 days
+          -- nowhere near enough for a useful backtest window.
+        </div>
+        <div class="grid" style="grid-template-columns: repeat(4, 1fr)">
+          <label>Strategy
+            <select id="bt-strategy"></select>
+          </label>
+          <label>Start date
+            <input id="bt-start-date" type="date" />
+          </label>
+          <label>End date
+            <input id="bt-end-date" type="date" />
+          </label>
+          <label>Max hold (trading days)
+            <input id="bt-max-hold" type="number" min="1" step="1" value="20" />
+          </label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="bt-full-universe" style="width:auto" checked />
+            Full F&amp;O universe (uncheck to enter specific symbols)
+          </label>
+        </div>
+        <div id="bt-symbols-row" class="hidden" style="margin-top:8px">
+          <label style="font-size:12px;color:var(--muted)">Symbols (comma separated)
+            <input id="bt-symbols" placeholder="e.g. RELIANCE, TCS, HDFCBANK" style="display:block;width:100%;margin-top:4px" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" id="btn-run-backtest">Run backtest</button>
+          <span id="bt-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+      </div>
+
+      <div class="panel hidden" id="bt-summary-panel">
+        <div class="summary-grid" id="bt-summary-grid"></div>
+      </div>
+
+      <div class="panel hidden" id="bt-trades-panel">
+        <div class="channels-header">
+          <h2 style="margin:0">Simulated trades</h2>
+        </div>
+        <table id="bt-trades-table" style="margin-top:14px">
+          <thead>
+            <tr><th>Symbol</th><th>Dir</th><th>Entry</th><th>Entry Price</th><th>Exit</th><th>Exit Price</th><th>Reason</th><th>Return</th><th>Hold (days)</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="channels-header">
+          <h2 style="margin:0">Past backtests</h2>
+        </div>
+        <table id="bt-runs-table" style="margin-top:14px">
+          <thead>
+            <tr><th>ID</th><th>Strategy</th><th>Range</th><th>Symbols</th><th>Trades</th><th>Win rate</th><th>Avg return</th><th>Status</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 
