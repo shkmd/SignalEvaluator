@@ -157,7 +157,8 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     unavailable_count INTEGER NOT NULL DEFAULT 0,
     conflict_count INTEGER NOT NULL DEFAULT 0,
     triggered_by_user_id INTEGER,
-    rule_version TEXT NOT NULL DEFAULT '1.0'
+    rule_version TEXT NOT NULL DEFAULT '1.0',
+    strategy_id TEXT NOT NULL DEFAULT 'range_expansion_v1'
 );
 
 CREATE TABLE IF NOT EXISTS scanner_results (
@@ -188,6 +189,16 @@ CREATE TABLE IF NOT EXISTS scanner_signal_settings (
     user_id INTEGER PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 0,
     strike_preference TEXT NOT NULL DEFAULT 'ATM',
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- Per-user opt-out of a strategy (absence of a row means enabled -- see
+-- get_user_strategy_settings) so existing users keep today's behavior with no migration.
+CREATE TABLE IF NOT EXISTS user_strategies (
+    user_id INTEGER NOT NULL,
+    strategy_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (user_id, strategy_id),
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
@@ -243,6 +254,11 @@ def init_db():
         sss_cols = {c["name"] for c in conn.execute("PRAGMA table_info(scanner_signal_settings)").fetchall()}
         if "strike_preference" not in sss_cols:
             conn.execute("ALTER TABLE scanner_signal_settings ADD COLUMN strike_preference TEXT NOT NULL DEFAULT 'ATM'")
+            conn.commit()
+
+        sr_cols = {c["name"] for c in conn.execute("PRAGMA table_info(scan_runs)").fetchall()}
+        if "strategy_id" not in sr_cols:
+            conn.execute("ALTER TABLE scan_runs ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'range_expansion_v1'")
             conn.commit()
     finally:
         conn.close()
@@ -913,12 +929,12 @@ def fo_universe_count() -> int:
 
 # ---- Scan runs / results ----
 
-def create_scan_run(stocks_total: int, triggered_by_user_id: int = None) -> int:
+def create_scan_run(stocks_total: int, triggered_by_user_id: int = None, strategy_id: str = "range_expansion_v1") -> int:
     conn = _conn()
     try:
         cur = conn.execute(
-            "INSERT INTO scan_runs (started_at, status, stocks_total, triggered_by_user_id) VALUES (?, 'running', ?, ?)",
-            (datetime.now(timezone.utc).isoformat(), stocks_total, triggered_by_user_id),
+            "INSERT INTO scan_runs (started_at, status, stocks_total, triggered_by_user_id, strategy_id) VALUES (?, 'running', ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), stocks_total, triggered_by_user_id, strategy_id),
         )
         conn.commit()
         return cur.lastrowid
@@ -976,19 +992,29 @@ def get_scan_run(scan_run_id: int) -> dict:
         conn.close()
 
 
-def get_latest_scan_run() -> dict:
+def get_latest_scan_run(strategy_id: str = None) -> dict:
     conn = _conn()
     try:
-        row = conn.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+        if strategy_id:
+            row = conn.execute(
+                "SELECT * FROM scan_runs WHERE strategy_id = ? ORDER BY id DESC LIMIT 1", (strategy_id,)
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
 
 
-def list_scan_runs(limit: int = 20) -> list:
+def list_scan_runs(limit: int = 20, strategy_id: str = None) -> list:
     conn = _conn()
     try:
-        rows = conn.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        if strategy_id:
+            rows = conn.execute(
+                "SELECT * FROM scan_runs WHERE strategy_id = ? ORDER BY id DESC LIMIT ?", (strategy_id, limit)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -1067,20 +1093,33 @@ def get_scanner_result(scan_run_id: int, symbol: str) -> dict:
         conn.close()
 
 
-def get_previous_classification(before_scan_run_id: int, symbol: str) -> str:
+def get_previous_classification(before_scan_run_id: int, symbol: str, strategy_id: str = None) -> str:
     """Classification this symbol had in the most recent scan run before the given one --
     used to detect a fresh transition into CE_QUALIFIED/PE_QUALIFIED rather than re-signaling
-    a stock that's already been qualified for several scans running."""
+    a stock that's already been qualified for several scans running. Scoped to the same
+    strategy when given, since different strategies' condition sets aren't comparable --
+    "already qualified last time" must mean under the same rules."""
     conn = _conn()
     try:
-        row = conn.execute(
-            """
-            SELECT classification FROM scanner_results
-            WHERE symbol = ? AND scan_run_id < ?
-            ORDER BY scan_run_id DESC LIMIT 1
-            """,
-            (symbol, before_scan_run_id),
-        ).fetchone()
+        if strategy_id:
+            row = conn.execute(
+                """
+                SELECT sr.classification FROM scanner_results sr
+                JOIN scan_runs run ON run.id = sr.scan_run_id
+                WHERE sr.symbol = ? AND sr.scan_run_id < ? AND run.strategy_id = ?
+                ORDER BY sr.scan_run_id DESC LIMIT 1
+                """,
+                (symbol, before_scan_run_id, strategy_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT classification FROM scanner_results
+                WHERE symbol = ? AND scan_run_id < ?
+                ORDER BY scan_run_id DESC LIMIT 1
+                """,
+                (symbol, before_scan_run_id),
+            ).fetchone()
         return row["classification"] if row else None
     finally:
         conn.close()
@@ -1120,6 +1159,52 @@ def list_users_with_scanner_signals_enabled() -> list:
     try:
         rows = conn.execute("SELECT user_id FROM scanner_signal_settings WHERE enabled = 1").fetchall()
         return [r["user_id"] for r in rows]
+    finally:
+        conn.close()
+
+
+# ---- Strategy settings (per user; absence of a row means enabled) ----
+
+def get_user_strategy_settings(user_id: int, all_strategy_ids: list) -> dict:
+    """Returns {strategy_id: enabled} for every known strategy. A strategy with no row for
+    this user defaults to enabled=True, so existing users see no behavior change until they
+    actively uncheck something on the Strategy tab."""
+    conn = _conn()
+    try:
+        rows = conn.execute("SELECT strategy_id, enabled FROM user_strategies WHERE user_id = ?", (user_id,)).fetchall()
+        overrides = {r["strategy_id"]: bool(r["enabled"]) for r in rows}
+        return {sid: overrides.get(sid, True) for sid in all_strategy_ids}
+    finally:
+        conn.close()
+
+
+def save_user_strategy_setting(user_id: int, strategy_id: str, enabled: bool) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO user_strategies (user_id, strategy_id, enabled) VALUES (?, ?, ?)
+            ON CONFLICT(user_id, strategy_id) DO UPDATE SET enabled = excluded.enabled
+            """,
+            (user_id, strategy_id, 1 if enabled else 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_enabled_strategy_ids_for_user(user_id: int, all_strategy_ids: list) -> list:
+    settings = get_user_strategy_settings(user_id, all_strategy_ids)
+    return [sid for sid, enabled in settings.items() if enabled]
+
+
+def is_strategy_enabled_for_user(user_id: int, strategy_id: str) -> bool:
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT enabled FROM user_strategies WHERE user_id = ? AND strategy_id = ?", (user_id, strategy_id)
+        ).fetchone()
+        return bool(row["enabled"]) if row else True  # no row = enabled by default
     finally:
         conn.close()
 

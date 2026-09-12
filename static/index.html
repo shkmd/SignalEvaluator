@@ -66,6 +66,10 @@
           <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span>
           F&amp;O Scanner
         </button>
+        <button id="tab-strategy" class="nav-item">
+          <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+          Strategy
+        </button>
         <button id="tab-evaluate" class="nav-item">
           <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg></span>
           Evaluate
@@ -175,7 +179,13 @@
       </div>
 
       <div class="panel">
-        <div class="summary-grid" id="scanner-summary-grid"></div>
+        <div class="channels-header">
+          <div style="font-size:13px;color:var(--muted)">Showing results for</div>
+          <label style="font-size:12px;color:var(--muted)">Strategy
+            <select id="sel-scanner-strategy" style="display:block;margin-top:4px;min-width:200px"></select>
+          </label>
+        </div>
+        <div class="summary-grid" id="scanner-summary-grid" style="margin-top:14px"></div>
       </div>
 
       <div class="panel">
@@ -195,6 +205,23 @@
           </thead>
           <tbody></tbody>
         </table>
+      </div>
+    </section>
+
+    <!-- STRATEGY TAB -->
+    <section id="view-strategy" class="hidden">
+      <div class="panel">
+        <h2>F&amp;O Scanner Strategies</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:4px">
+          Each checked strategy runs as its own pass over the F&amp;O universe when you click
+          "Run scan now" on the Scanner tab -- results are kept separate per strategy, so you
+          can compare which one is finding better setups. Unchecking a strategy here stops it
+          from running (and from generating signals into your History), but doesn't touch its
+          past scan results.
+        </div>
+      </div>
+      <div class="panel">
+        <div id="strategy-list"></div>
       </div>
     </section>
 

@@ -1,5 +1,6 @@
 """Per-user Telethon client registry. Each user has their own API ID/Hash and their own
 session file, so each user's Telegram connection is fully independent of every other user's."""
+import asyncio
 from pathlib import Path
 from telethon import TelegramClient
 
@@ -21,7 +22,16 @@ def get_client(user_id: int) -> TelegramClient:
             )
         session_name = creds.get("session_name") or f"user_{user_id}"
         session_path = str(DATA_DIR / session_name)
-        _clients[user_id] = TelegramClient(session_path, int(creds["api_id"]), creds["api_hash"])
+        # Telethon's constructor calls asyncio.get_event_loop() internally if no loop= is
+        # given, which raises on any thread that never had one set (e.g. a scanner worker
+        # thread, or FastAPI's own request threadpool for a sync endpoint) -- so make sure
+        # one exists on whichever thread happens to build this client first.
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        _clients[user_id] = TelegramClient(session_path, int(creds["api_id"]), creds["api_hash"], loop=loop)
     return _clients[user_id]
 
 

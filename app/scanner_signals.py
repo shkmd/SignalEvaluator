@@ -21,7 +21,13 @@ PREMIUM_SL_PCT = 0.30  # options move fast -- stop-loss as a % of premium, not u
 
 
 def generate_signals_for_scan(scan_run_id: int) -> list:
-    users = db.list_users_with_scanner_signals_enabled()
+    scan_run = db.get_scan_run(scan_run_id)
+    strategy_id = scan_run["strategy_id"] if scan_run else None
+
+    candidate_users = db.list_users_with_scanner_signals_enabled()
+    # A user only gets signals from a strategy they've actually left enabled (default-on,
+    # see get_user_strategy_settings) -- "generate signals" is necessary but not sufficient.
+    users = [u for u in candidate_users if db.is_strategy_enabled_for_user(u, strategy_id)] if strategy_id else candidate_users
     if not users:
         return []
 
@@ -29,7 +35,7 @@ def generate_signals_for_scan(scan_run_id: int) -> list:
     for classification in ("CE_QUALIFIED", "PE_QUALIFIED"):
         results = db.list_scanner_results(scan_run_id, classification=classification)
         for result in results:
-            prev = db.get_previous_classification(scan_run_id, result["symbol"])
+            prev = db.get_previous_classification(scan_run_id, result["symbol"], strategy_id=strategy_id)
             if prev == classification:
                 continue  # already signaled during this same qualification streak
 

@@ -89,6 +89,7 @@ $("btn-logout").onclick = async (e) => {
 const tabs = {
   dashboard: { btn: $("tab-dashboard"), view: $("view-dashboard"), title: "Dashboard" },
   scanner: { btn: $("tab-scanner"), view: $("view-scanner"), title: "F&O Directional Scanner" },
+  strategy: { btn: $("tab-strategy"), view: $("view-strategy"), title: "Strategy" },
   evaluate: { btn: $("tab-evaluate"), view: $("view-evaluate"), title: "Evaluate Signal" },
   history: { btn: $("tab-history"), view: $("view-history"), title: "Signal History" },
   stats: { btn: $("tab-stats"), view: $("view-stats"), title: "Channel Stats" },
@@ -110,6 +111,7 @@ function showTab(name) {
   if (name === "orderbook") loadOrderBook();
   if (name === "broker") loadBrokerTab();
   if (name === "scanner") loadScannerTab();
+  if (name === "strategy") loadStrategyTab();
   if (name === "dashboard") loadDashboard();
 }
 Object.entries(tabs).forEach(([name, t]) => (t.btn.onclick = () => showTab(name)));
@@ -1529,9 +1531,81 @@ async function disconnectBroker(brokerId) {
 // ---- F&O Scanner ----
 let _scannerFilter = "ALL";
 let _scannerLatestRunId = null;
+let _scannerStrategyId = "";
 
 async function loadScannerTab() {
-  await Promise.all([refreshScannerUniverseCount(), loadLatestScanSummary(), loadScannerSignalSettings()]);
+  await Promise.all([
+    refreshScannerUniverseCount(),
+    populateScannerStrategySelect(),
+    loadLatestScanSummary(),
+    loadScannerSignalSettings(),
+  ]);
+}
+
+async function populateScannerStrategySelect() {
+  const sel = $("sel-scanner-strategy");
+  try {
+    const res = await fetch("/api/strategies");
+    const list = await res.json();
+    const prev = sel.value;
+    sel.innerHTML =
+      `<option value="">All strategies (latest overall)</option>` +
+      list.map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
+    sel.value = list.some((s) => s.id === prev) ? prev : "";
+    _scannerStrategyId = sel.value;
+  } catch (e) {
+    // leave the select empty -- summary/results still work unfiltered
+  }
+}
+
+$("sel-scanner-strategy").onchange = () => {
+  _scannerStrategyId = $("sel-scanner-strategy").value;
+  loadLatestScanSummary();
+};
+
+// ---- Strategy tab ----
+async function loadStrategyTab() {
+  const container = $("strategy-list");
+  container.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:16px 4px">Loading…</div>`;
+  try {
+    const [listRes, settingsRes] = await Promise.all([
+      fetch("/api/strategies"),
+      fetch("/api/strategies/settings"),
+    ]);
+    const list = await listRes.json();
+    const settings = await settingsRes.json();
+
+    container.innerHTML = list
+      .map(
+        (s) => `
+      <div class="strategy-card">
+        <input type="checkbox" data-strategy-id="${s.id}" ${settings[s.id] ? "checked" : ""} />
+        <div>
+          <div class="strategy-name">${s.name}</div>
+          <div class="strategy-desc">${s.description}</div>
+        </div>
+      </div>`
+      )
+      .join("");
+
+    container.querySelectorAll("input[type=checkbox]").forEach((chk) => {
+      chk.onchange = async () => {
+        chk.disabled = true;
+        try {
+          await fetch("/api/strategies/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ strategy_id: chk.dataset.strategyId, enabled: chk.checked }),
+          });
+          await populateScannerStrategySelect();
+        } finally {
+          chk.disabled = false;
+        }
+      };
+    });
+  } catch (e) {
+    container.innerHTML = `<div style="color:var(--red);padding:16px 4px">Error: ${e.message}</div>`;
+  }
 }
 
 async function loadScannerSignalSettings() {
@@ -1589,15 +1663,19 @@ $("btn-run-scan").onclick = async () => {
   const statusEl = $("scanner-status");
   const btn = $("btn-run-scan");
   btn.disabled = true;
-  statusEl.textContent = "Scanning F&O universe… this can take up to a minute.";
+  statusEl.textContent = "Scanning F&O universe… this can take up to a minute per enabled strategy.";
   try {
     const res = await fetch("/api/scanner/run", { method: "POST" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Scan failed");
-    statusEl.textContent =
-      `Scan complete: ${data.stocks_scanned}/${data.stocks_total} scanned -- ` +
-      `${data.ce_qualified} CE, ${data.pe_qualified} PE, ${data.near_ce + data.near_pe} near, ${data.unavailable} unavailable` +
-      (data.signals_generated ? `, ${data.signals_generated} signal(s) generated.` : ".");
+    const lines = data.runs.map(
+      (r) =>
+        `${r.strategy_id}: ${r.stocks_scanned}/${r.stocks_total} scanned -- ${r.ce_qualified} CE, ${r.pe_qualified} PE, ` +
+        `${r.near_ce + r.near_pe} near, ${r.unavailable} unavailable` +
+        (r.signals_generated ? `, ${r.signals_generated} signal(s) generated` : "")
+    );
+    statusEl.textContent = lines.join(" | ") + (data.errors.length ? ` (errors: ${data.errors.join("; ")})` : "");
+    await populateScannerStrategySelect();
     await loadLatestScanSummary();
   } catch (e) {
     statusEl.textContent = "Error: " + e.message;
@@ -1608,7 +1686,8 @@ $("btn-run-scan").onclick = async () => {
 
 async function loadLatestScanSummary() {
   try {
-    const res = await fetch("/api/scanner/runs/latest");
+    const qs = _scannerStrategyId ? `?strategy_id=${encodeURIComponent(_scannerStrategyId)}` : "";
+    const res = await fetch(`/api/scanner/runs/latest${qs}`);
     if (!res.ok) {
       renderScannerSummary(null);
       renderScannerResultsTable([]);
@@ -1631,6 +1710,7 @@ function renderScannerSummary(run) {
   }
   const nearTotal = run.near_ce_count + run.near_pe_count;
   const tiles = [
+    ["Strategy", run.strategy_id],
     ["Total F&O stocks", run.stocks_total],
     ["Stocks scanned", run.stocks_scanned],
     ["CE qualified", run.ce_qualified_count],

@@ -10,7 +10,7 @@ from typing import Optional, List
 
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
-from app import fo_universe, scanner, telegram_broadcast
+from app import fo_universe, scanner, telegram_broadcast, strategies as strategies_mod
 from app.brokers import kite as kite_broker, upstox as upstox_broker, dhan as dhan_broker
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from app.telegram_client import reset_client
@@ -480,23 +480,60 @@ def refresh_fo_universe(user_id: int = Depends(current_user_id)):
 
 @app.post("/api/scanner/run")
 def run_scanner(user_id: int = Depends(current_user_id)):
-    try:
-        return scanner.run_scan(triggered_by_user_id=user_id)
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    all_ids = [s["id"] for s in strategies_mod.list_strategies()]
+    enabled_ids = db.list_enabled_strategy_ids_for_user(user_id, all_ids)
+    if not enabled_ids:
+        raise HTTPException(status_code=400, detail="No strategies enabled -- enable at least one on the Strategy tab.")
+
+    runs = []
+    errors = []
+    for strategy_id in enabled_ids:
+        try:
+            runs.append(scanner.run_scan(triggered_by_user_id=user_id, strategy_id=strategy_id))
+        except RuntimeError as e:
+            errors.append(f"{strategy_id}: {e}")
+
+    if not runs and errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+    return {"runs": runs, "errors": errors}
 
 
 @app.get("/api/scanner/runs")
-def list_scan_runs(limit: int = 20, user_id: int = Depends(current_user_id)):
-    return db.list_scan_runs(limit=limit)
+def list_scan_runs(limit: int = 20, strategy_id: Optional[str] = None, user_id: int = Depends(current_user_id)):
+    return db.list_scan_runs(limit=limit, strategy_id=strategy_id)
 
 
 @app.get("/api/scanner/runs/latest")
-def get_latest_run(user_id: int = Depends(current_user_id)):
-    run = db.get_latest_scan_run()
+def get_latest_run(strategy_id: Optional[str] = None, user_id: int = Depends(current_user_id)):
+    run = db.get_latest_scan_run(strategy_id=strategy_id)
     if not run:
         raise HTTPException(status_code=404, detail="No scan runs yet -- run a scan first.")
     return run
+
+
+@app.get("/api/strategies")
+def list_strategies(user_id: int = Depends(current_user_id)):
+    return strategies_mod.list_strategies()
+
+
+@app.get("/api/strategies/settings")
+def get_strategy_settings(user_id: int = Depends(current_user_id)):
+    all_ids = [s["id"] for s in strategies_mod.list_strategies()]
+    return db.get_user_strategy_settings(user_id, all_ids)
+
+
+class StrategySettingRequest(BaseModel):
+    strategy_id: str
+    enabled: bool
+
+
+@app.post("/api/strategies/settings")
+def save_strategy_setting(req: StrategySettingRequest, user_id: int = Depends(current_user_id)):
+    if not strategies_mod.is_valid_strategy_id(req.strategy_id):
+        raise HTTPException(status_code=400, detail=f"Unknown strategy '{req.strategy_id}'.")
+    db.save_user_strategy_setting(user_id, req.strategy_id, req.enabled)
+    all_ids = [s["id"] for s in strategies_mod.list_strategies()]
+    return db.get_user_strategy_settings(user_id, all_ids)
 
 
 @app.get("/api/scanner/results")

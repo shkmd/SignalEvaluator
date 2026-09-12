@@ -3,6 +3,7 @@ persists results. Manual trigger only in Phase 1 -- scheduled 15-minute runs are
 """
 import io
 import csv
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app import db, qualification, scanner_signals
@@ -14,12 +15,18 @@ MAX_WORKERS_FREE_DATA = 8
 MAX_WORKERS_BROKER = 3
 
 
-def run_scan(triggered_by_user_id: int = None) -> dict:
+def run_scan(triggered_by_user_id: int = None, strategy_id: str = None) -> dict:
+    from app import strategies as strategies_mod
+
+    strategy_id = strategy_id or strategies_mod.DEFAULT_STRATEGY_ID
+
     universe = db.list_fo_universe(include_indices=False)
     if not universe:
         raise RuntimeError("F&O universe is empty -- refresh it first (Scanner > Refresh universe).")
 
-    scan_run_id = db.create_scan_run(stocks_total=len(universe), triggered_by_user_id=triggered_by_user_id)
+    scan_run_id = db.create_scan_run(
+        stocks_total=len(universe), triggered_by_user_id=triggered_by_user_id, strategy_id=strategy_id
+    )
 
     counts = {
         "stocks_scanned": 0,
@@ -44,7 +51,10 @@ def run_scan(triggered_by_user_id: int = None) -> dict:
 
     def _scan_one(stock):
         result = qualification.evaluate_stock(
-            stock["resolved_symbol"], futures_eligible=bool(stock["futures_eligible"]), user_id=broker_user_id
+            stock["resolved_symbol"],
+            futures_eligible=bool(stock["futures_eligible"]),
+            user_id=broker_user_id,
+            strategy_id=strategy_id,
         )
         return stock, result
 
@@ -98,9 +108,11 @@ def run_scan(triggered_by_user_id: int = None) -> dict:
         signals_generated = scanner_signals.generate_signals_for_scan(scan_run_id)
     except Exception as e:
         print(f"[scanner] Signal generation failed for run {scan_run_id}: {e}")
+        traceback.print_exc()
 
     return {
         "scan_run_id": scan_run_id,
+        "strategy_id": strategy_id,
         **counts,
         "stocks_total": len(universe),
         "signals_generated": len(signals_generated),

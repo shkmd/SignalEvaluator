@@ -314,9 +314,15 @@ def classify(ce_result: dict, pe_result: dict, near_qualified_max_failures: int 
     return {"classification": "NOT_QUALIFIED"}
 
 
-def evaluate_stock(symbol: str, futures_eligible: bool = True, user_id: int = None) -> dict:
-    """Full pipeline for one stock: fetch snapshot, evaluate CE + PE, classify.
-    Never raises for a data problem -- returns a DATA_UNAVAILABLE result instead."""
+def evaluate_stock(symbol: str, futures_eligible: bool = True, user_id: int = None, strategy_id: str = None) -> dict:
+    """Full pipeline for one stock: fetch snapshot, evaluate CE + PE under the given
+    strategy's conditions, classify. Never raises for a data problem -- returns a
+    DATA_UNAVAILABLE result instead."""
+    from app import strategies as strategies_mod
+
+    strategy_id = strategy_id or strategies_mod.DEFAULT_STRATEGY_ID
+    evaluate_direction_fn = strategies_mod.get_strategy(strategy_id)["evaluate_direction"]
+
     if not futures_eligible:
         return {
             "symbol": symbol,
@@ -329,8 +335,8 @@ def evaluate_stock(symbol: str, futures_eligible: bool = True, user_id: int = No
     except DataUnavailable as e:
         return {"symbol": symbol, "classification": "DATA_UNAVAILABLE", "error_reason": e.reason}
 
-    ce_result = evaluate_direction("CE", snapshot, futures_eligible)
-    pe_result = evaluate_direction("PE", snapshot, futures_eligible)
+    ce_result = evaluate_direction_fn("CE", snapshot, futures_eligible)
+    pe_result = evaluate_direction_fn("PE", snapshot, futures_eligible)
     classification = classify(ce_result, pe_result)
 
     return {

@@ -430,3 +430,9 @@ select.outcome-select { font-size: 12px; padding: 4px 6px; }
 .add-btn:hover { background: rgba(52,211,153,0.25); }
 
 .channel-empty { color: var(--muted); font-size: 13px; padding: 16px 4px; }
+
+.strategy-card { display: flex; align-items: flex-start; gap: 14px; padding: 16px 4px; border-bottom: 1px solid var(--border); }
+.strategy-card:last-child { border-bottom: none; }
+.strategy-card input[type="checkbox"] { width: 18px; height: 18px; margin-top: 2px; flex-shrink: 0; cursor: pointer; accent-color: var(--blue); }
+.strategy-card .strategy-name { font-size: 14px; font-weight: 600; }
+.strategy-card .strategy-desc { color: var(--muted); font-size: 12.5px; margin-top: 4px; line-height: 1.5; }
