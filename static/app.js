@@ -1664,7 +1664,7 @@ $("btn-run-backtest").onclick = async () => {
   }
 
   btn.disabled = true;
-  statusEl.textContent = "Running backtest… this can take a while over the full universe or a long date range.";
+  statusEl.textContent = "Starting backtest…";
   $("bt-summary-panel").classList.add("hidden");
   $("bt-trades-panel").classList.add("hidden");
   try {
@@ -1675,10 +1675,7 @@ $("btn-run-backtest").onclick = async () => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Backtest failed");
-    statusEl.textContent = `Done: ${data.total_trades} trade(s) across ${data.symbols_scanned} symbol(s).` +
-      (Object.keys(data.errors || {}).length ? ` (${Object.keys(data.errors).length} symbol(s) had no usable data.)` : "");
-    renderBacktestSummary(data);
-    await loadBacktestTrades(data.backtest_run_id);
+    await pollBacktestRun(data.backtest_run_id);
     await loadBacktestRunsList();
   } catch (e) {
     statusEl.textContent = "Error: " + e.message;
@@ -1686,6 +1683,41 @@ $("btn-run-backtest").onclick = async () => {
     btn.disabled = false;
   }
 };
+
+// Runs server-side on a background thread (a full-universe, multi-year backtest can take
+// several minutes) -- poll rather than holding one HTTP request open that long.
+async function pollBacktestRun(backtestRunId) {
+  const statusEl = $("bt-status");
+  const started = Date.now();
+  while (true) {
+    let run;
+    try {
+      const res = await fetch(`/api/backtest/runs/${backtestRunId}`);
+      run = await res.json();
+      if (!res.ok) throw new Error(run.detail || "Could not check backtest status");
+    } catch (e) {
+      statusEl.textContent = "Error: " + e.message;
+      return;
+    }
+
+    const elapsed = Math.round((Date.now() - started) / 1000);
+    if (run.status === "running") {
+      statusEl.textContent = `Running backtest… ${elapsed}s elapsed.`;
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
+    if (run.status === "failed") {
+      statusEl.textContent = "Backtest failed: " + (run.errors?._run || "unknown error");
+      return;
+    }
+
+    statusEl.textContent = `Done in ${elapsed}s: ${run.total_trades} trade(s) across ${run.symbols_scanned} symbol(s).` +
+      (Object.keys(run.errors || {}).length ? ` (${Object.keys(run.errors).length} symbol(s) had no usable data.)` : "");
+    renderBacktestSummary(run);
+    await loadBacktestTrades(backtestRunId);
+    return;
+  }
+}
 
 function renderBacktestSummary(stats) {
   const panel = $("bt-summary-panel");
@@ -1760,6 +1792,10 @@ async function loadBacktestRunsList() {
   tbody.querySelectorAll("tr[data-run-id]").forEach((tr) => {
     tr.onclick = async () => {
       const run = runs.find((r) => String(r.id) === tr.dataset.runId);
+      if (run && run.status === "running") {
+        await pollBacktestRun(tr.dataset.runId);
+        return;
+      }
       if (run) renderBacktestSummary(run);
       await loadBacktestTrades(tr.dataset.runId);
     };

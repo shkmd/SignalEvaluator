@@ -556,11 +556,12 @@ def run_backtest(req: BacktestRunRequest, user_id: int = Depends(current_user_id
             raise HTTPException(status_code=400, detail="F&O universe is empty -- refresh it first (Scanner tab).")
 
     try:
-        return backtest_mod.run_backtest(
+        backtest_run_id = backtest_mod.start_backtest(
             user_id, req.strategy_id, symbols, req.start_date, req.end_date, req.max_hold_days
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    return {"backtest_run_id": backtest_run_id, "status": "running", "symbols_scanned": len(symbols)}
 
 
 @app.get("/api/backtest/runs")

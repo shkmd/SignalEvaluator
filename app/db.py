@@ -261,9 +261,15 @@ CREATE TABLE IF NOT EXISTS telegram_broadcast_settings (
 
 def _conn():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL lets readers and writers avoid blocking each other, and busy_timeout makes a
+    # writer that does contend retry for a while instead of raising "database is locked"
+    # immediately (the default busy_timeout is 0) -- needed now that background jobs like
+    # the scanner and backtester write from several threads concurrently.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 

@@ -22,6 +22,7 @@ the live scanner (which tries an ATM option contract first), a backtest can't si
 option premium would have done -- it answers "would the underlying stock's move have worked,"
 not "would this exact option trade have worked."
 """
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
@@ -45,36 +46,55 @@ def _row(df: pd.DataFrame, idx: int) -> dict:
     }
 
 
-def _build_snapshot_at(daily: pd.DataFrame, i: int) -> dict:
+def _precompute(daily: pd.DataFrame) -> dict:
+    """Vectorized, whole-frame versions of everything gather_snapshot would otherwise
+    recompute per day -- turns what was an O(n^2) per-symbol cost (a fresh rolling-window
+    mean and a fresh weekly/monthly resample on every single day of the simulation) into a
+    handful of O(n) passes done once. None of this leaks future data into day i:
+      - SMA20/50 are rolling means, which only look backward by construction.
+      - "This week/month's opening price" is the Open of the first trading day in the same
+        week/month as day i -- a label grouping, not a lookahead, since the first day of a
+        period is always <= any other day in it.
+      - "This week/month's close so far" is simply day i's own close: resampling a frame
+        that ends exactly at day i (as the live scanner does) always yields today's close as
+        the last value of whichever weekly/monthly bucket contains today, since today is
+        necessarily the last row overall. So there's no separate series to compute for it.
+    """
+    close = daily["Close"]
+    sma20 = close.rolling(20).mean()
+    sma50 = close.rolling(50).mean()
+    naive_index = daily.index.tz_localize(None) if daily.index.tz is not None else daily.index
+    week_period = naive_index.to_period("W")
+    month_period = naive_index.to_period("M")
+    week_open = daily.groupby(week_period)["Open"].transform("first")
+    month_open = daily.groupby(month_period)["Open"].transform("first")
+    return {"sma20": sma20, "sma50": sma50, "week_open": week_open, "month_open": month_open}
+
+
+def _build_snapshot_at(daily: pd.DataFrame, i: int, pre: dict) -> dict:
     """Mirrors qualification.gather_snapshot's math (see module docstring for the one
     disclosed difference: INTRADAY_15M uses today's own close). Returns None if there isn't
     enough history yet at this index to compute every condition."""
     if i < 8 or i + 1 < qualification.MIN_DAILY_CANDLES:
         return None
 
-    window = daily.iloc[: i + 1]
-    current_day = _row(window, -1)
-    previous_day = _row(window, -2)
-    previous_seven_days = [_row(window, -k) for k in range(2, 9)]
-
-    sma20 = window["Close"].rolling(20).mean().iloc[-1]
-    sma50 = window["Close"].rolling(50).mean().iloc[-1]
+    sma20 = pre["sma20"].iloc[i]
+    sma50 = pre["sma50"].iloc[i]
     if pd.isna(sma20) or pd.isna(sma50):
         return None
 
-    weekly = window.resample("W").agg({"Open": "first", "Close": "last"}).dropna()
-    monthly = window.resample("ME").agg({"Open": "first", "Close": "last"}).dropna()
-    if weekly.empty or monthly.empty:
-        return None
+    current_day = _row(daily, i)
+    previous_day = _row(daily, i - 1)
+    previous_seven_days = [_row(daily, i - k) for k in range(1, 8)]
 
     return {
         "current_day": current_day,
         "previous_day": previous_day,
         "previous_seven_days": previous_seven_days,
-        "current_weekly_open": float(weekly["Open"].iloc[-1]),
-        "current_weekly_close": float(weekly["Close"].iloc[-1]),
-        "current_monthly_open": float(monthly["Open"].iloc[-1]),
-        "current_monthly_close": float(monthly["Close"].iloc[-1]),
+        "current_weekly_open": float(pre["week_open"].iloc[i]),
+        "current_weekly_close": current_day["close"],
+        "current_monthly_open": float(pre["month_open"].iloc[i]),
+        "current_monthly_close": current_day["close"],
         "weekly_provisional": False,
         "monthly_provisional": False,
         "daily_sma20": round(float(sma20), 4),
@@ -167,6 +187,7 @@ def _simulate_symbol(symbol: str, resolved_symbol: str, start_date: str, end_dat
         start_ts = start_ts.tz_localize(tz)
         end_ts = end_ts.tz_localize(tz)
 
+    pre = _precompute(daily)
     trades = []
     open_trade = None
     prev_classification = None
@@ -195,7 +216,7 @@ def _simulate_symbol(symbol: str, resolved_symbol: str, start_date: str, end_dat
         # whether a trade is currently open, so the transition check on the day a trade
         # closes always compares against the *actual* prior day's classification -- never a
         # stale value frozen from before the trade opened.
-        snapshot = _build_snapshot_at(daily, i)
+        snapshot = _build_snapshot_at(daily, i, pre)
         if snapshot is None:
             continue
 
@@ -215,23 +236,38 @@ def _simulate_symbol(symbol: str, resolved_symbol: str, start_date: str, end_dat
     return trades, None
 
 
-def run_backtest(
+def start_backtest(
     user_id: int,
     strategy_id: str,
     symbols: list,
     start_date: str,
     end_date: str,
     max_hold_days: int = DEFAULT_MAX_HOLD_DAYS,
-) -> dict:
+) -> int:
+    """Validates inputs, creates the run row, and kicks off the actual simulation on a
+    background thread -- a full-universe, multi-year backtest can take minutes even after
+    the per-symbol speedups below, far longer than an HTTP request (or a proxy in front of
+    one) should be held open for. The caller gets the run id back immediately and polls
+    GET /api/backtest/runs/{id} for status, the same pattern the F&O Scanner already uses
+    for "is this run done yet." Returns the new backtest_run_id."""
     if not strategies_mod.is_valid_strategy_id(strategy_id):
         raise ValueError(f"Unknown strategy '{strategy_id}'.")
     if not symbols:
         raise ValueError("No symbols to backtest.")
 
-    universe_by_symbol = {s["symbol"]: s for s in db.list_fo_universe(include_indices=False)}
-
     backtest_run_id = db.create_backtest_run(user_id, strategy_id, symbols, start_date, end_date, max_hold_days)
 
+    thread = threading.Thread(
+        target=_execute_backtest,
+        args=(backtest_run_id, symbols, start_date, end_date, max_hold_days),
+        daemon=True,
+    )
+    thread.start()
+    return backtest_run_id
+
+
+def _execute_backtest(backtest_run_id: int, symbols: list, start_date: str, end_date: str, max_hold_days: int) -> None:
+    universe_by_symbol = {s["symbol"]: s for s in db.list_fo_universe(include_indices=False)}
     all_trades = []
     errors = {}
 
@@ -252,12 +288,10 @@ def run_backtest(
                     all_trades.append(t)
     except Exception as e:
         db.fail_backtest_run(backtest_run_id, str(e))
-        raise
+        return
 
     stats = _aggregate(all_trades, len(symbols), errors)
     db.finish_backtest_run(backtest_run_id, stats)
-
-    return {"backtest_run_id": backtest_run_id, **stats}
 
 
 def _aggregate(trades: list, symbols_scanned: int, errors: dict) -> dict:
