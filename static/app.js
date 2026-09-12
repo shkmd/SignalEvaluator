@@ -277,6 +277,7 @@ $("btn-evaluate").onclick = async () => {
     if (!res.ok) throw new Error("Evaluation request failed (" + res.status + ")");
     const data = await res.json();
     renderTradeSetup({ ...payload, lot_size: data.lot_size }, "trade-setup");
+    renderTradingViewChart(payload, "eval-chart-container");
     renderResult(data);
     $("eval-status").textContent = "Saved as signal #" + data.signal_id;
   } catch (e) {
@@ -450,6 +451,74 @@ function fmtRupees(v) {
   return v == null ? "-" : "₹" + Math.round(v).toLocaleString("en-IN");
 }
 
+// ---- TradingView chart embed ----
+// Free "Advanced Chart" widget -- real, interactive, no backend work. It's a sandboxed
+// embed with no API to draw custom price lines, so Buy/SL/Target stay as the numbers in
+// the Trade Setup box above rather than lines drawn on the chart itself.
+let _tvScriptPromise = null;
+function loadTradingViewScript() {
+  if (window.TradingView) return Promise.resolve();
+  if (_tvScriptPromise) return _tvScriptPromise;
+  _tvScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://s3.tradingview.com/tv.js";
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("failed to load"));
+    document.head.appendChild(script);
+  });
+  return _tvScriptPromise;
+}
+
+let _tvWidgetCounter = 0;
+async function renderTradingViewChart(s, elId) {
+  const el = $(elId);
+  if (!el) return;
+  el.innerHTML = "";
+
+  const symbol = (s.resolved_symbol || s.symbol || "").toUpperCase();
+  if (!symbol) {
+    el.innerHTML = "";
+    return;
+  }
+
+  if (s.instrument === "CE" || s.instrument === "PE") {
+    const note = document.createElement("div");
+    note.className = "tv-note";
+    note.textContent = `Showing the underlying (${symbol}) -- individual option contracts aren't chartable via this free widget.`;
+    el.appendChild(note);
+  }
+
+  const containerId = `tv-chart-${++_tvWidgetCounter}`;
+  const chartDiv = document.createElement("div");
+  chartDiv.id = containerId;
+  chartDiv.style.height = "420px";
+  el.appendChild(chartDiv);
+
+  try {
+    await loadTradingViewScript();
+    new TradingView.widget({
+      autosize: true,
+      // TradingView's free public widget gates NSE real-time data ("this symbol is only
+      // available on TradingView") but serves BSE fine -- verified directly (NSE:RELIANCE
+      // fails, BSE:RELIANCE/TCS/PAYTM/CHOLAFIN all render). Same company, same price action,
+      // just the other exchange's tape.
+      symbol: `BSE:${symbol}`,
+      interval: "D",
+      timezone: "Asia/Kolkata",
+      theme: "dark",
+      style: "1",
+      locale: "en",
+      toolbar_bg: "#14141d",
+      enable_publishing: false,
+      allow_symbol_change: true,
+      hide_side_toolbar: false,
+      container_id: containerId,
+    });
+  } catch (e) {
+    chartDiv.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center">Chart unavailable (${e.message}).</div>`;
+  }
+}
+
 function renderTradeSetup(s, elId) {
   const el = $(elId);
   if (!el) return;
@@ -540,6 +609,7 @@ async function openSignalDetail(signalId) {
       $("detail-raw-text").classList.remove("hidden");
     }
     renderTradeSetup(s, "detail-trade-setup");
+    renderTradingViewChart(s, "detail-chart-container");
     renderEvaluation(s.evaluation || {}, "d-");
   } catch (e) {
     $("detail-modal-body").innerHTML = `<div style="color:var(--red);padding:20px">Error: ${e.message}</div>`;

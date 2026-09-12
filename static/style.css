@@ -293,6 +293,9 @@ select.outcome-select { font-size: 12px; padding: 4px 6px; }
 .trade-setup .ts-value.buy { color: var(--green); }
 .trade-setup .ts-value.sl { color: var(--red); }
 .trade-setup .ts-value.target { color: var(--blue); }
+
+.chart-container { margin: 0 0 16px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+.chart-container .tv-note { color: var(--muted); font-size: 11px; padding: 6px 10px; background: var(--panel-2); }
 .history-row-clickable { cursor: pointer; }
 .history-row-clickable:hover { background: var(--panel-2); }
 
