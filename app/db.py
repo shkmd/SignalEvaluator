@@ -716,6 +716,83 @@ def channel_stats(user_id: int) -> list:
         conn.close()
 
 
+def reliability_dashboard(user_id: int) -> dict:
+    """Unified view of every auto-paper-trade source (F&O Scanner, each Telegram channel,
+    manual) side by side: signal-level hit rate (from signals.outcome, same as channel_stats)
+    plus trade-level P&L (from closed paper orders, joined via signal_id) -- so "which source
+    is actually worth trusting" has one answer instead of three separate pages. Only paper
+    trades are counted since that's what every auto-trade source uses to measure itself;
+    live orders are a manual, deliberate act and don't belong in a reliability score."""
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.channel AS channel,
+                   s.source AS source,
+                   COUNT(DISTINCT s.id) AS total_signals,
+                   SUM(CASE WHEN s.outcome = 'target_hit' THEN 1 ELSE 0 END) AS targets_hit,
+                   SUM(CASE WHEN s.outcome = 'sl_hit' THEN 1 ELSE 0 END) AS sl_hit,
+                   SUM(CASE WHEN s.outcome = 'pending' THEN 1 ELSE 0 END) AS pending,
+                   AVG(s.score) AS avg_score,
+                   COUNT(o.id) AS trades_closed,
+                   SUM(CASE WHEN o.pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                   SUM(o.pnl) AS total_pnl,
+                   AVG(o.pnl) AS avg_pnl
+            FROM signals s
+            LEFT JOIN orders o ON o.signal_id = s.id AND o.status = 'closed' AND o.mode = 'paper'
+            WHERE s.user_id = ?
+            GROUP BY s.channel, s.source
+            """,
+            (user_id,),
+        ).fetchall()
+
+        sources = []
+        for r in rows:
+            d = dict(r)
+            decided = d["total_signals"] - d["pending"]
+            d["hit_rate"] = round(100 * d["targets_hit"] / decided, 1) if decided else None
+            d["trades_closed"] = d["trades_closed"] or 0
+            d["wins"] = d["wins"] or 0
+            d["losses"] = d["trades_closed"] - d["wins"]
+            d["win_rate"] = round(100 * d["wins"] / d["trades_closed"], 1) if d["trades_closed"] else None
+            d["total_pnl"] = round(d["total_pnl"], 2) if d["total_pnl"] is not None else 0.0
+            d["avg_pnl"] = round(d["avg_pnl"], 2) if d["avg_pnl"] is not None else None
+            d["avg_score"] = round(d["avg_score"], 1) if d["avg_score"] is not None else None
+            sources.append(d)
+        sources.sort(key=lambda d: d["total_pnl"], reverse=True)
+
+        curve_rows = conn.execute(
+            """
+            SELECT date(closed_at) AS day, SUM(pnl) AS day_pnl
+            FROM orders
+            WHERE user_id = ? AND status = 'closed' AND mode = 'paper' AND pnl IS NOT NULL
+            GROUP BY day
+            ORDER BY day ASC
+            """,
+            (user_id,),
+        ).fetchall()
+        equity_curve = []
+        running = 0.0
+        for r in curve_rows:
+            running += r["day_pnl"]
+            equity_curve.append({"day": r["day"], "cumulative_pnl": round(running, 2)})
+
+        traded = [d for d in sources if d["trades_closed"] > 0]
+        total_trades = sum(d["trades_closed"] for d in traded)
+        total_wins = sum(d["wins"] for d in traded)
+        summary = {
+            "total_trades": total_trades,
+            "total_pnl": round(sum(d["total_pnl"] for d in traded), 2),
+            "win_rate": round(100 * total_wins / total_trades, 1) if total_trades else None,
+            "best_channel": max(traded, key=lambda d: d["total_pnl"])["channel"] if traded else None,
+            "worst_channel": min(traded, key=lambda d: d["total_pnl"])["channel"] if len(traded) > 1 else None,
+        }
+
+        return {"sources": sources, "equity_curve": equity_curve, "summary": summary}
+    finally:
+        conn.close()
+
+
 # ---- Auto-trade settings (one row per user) ----
 
 DEFAULT_SETTINGS = {

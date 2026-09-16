@@ -1245,24 +1245,85 @@ $("btn-sync-channels").onclick = async () => {
 
 // ---- Stats ----
 async function loadStats() {
-  const res = await fetch("/api/channels/stats");
-  const rows = await res.json();
+  const res = await fetch("/api/stats/reliability");
+  const data = await res.json();
+
+  renderReliabilitySummary(data.summary);
+  renderEquityCurve(data.equity_curve);
+
   const tbody = document.querySelector("#stats-table tbody");
   tbody.innerHTML = "";
-  rows.forEach((c) => {
+  data.sources.forEach((c) => {
     const tr = document.createElement("tr");
+    const pnlColor = c.total_pnl > 0 ? "var(--green)" : c.total_pnl < 0 ? "var(--red)" : "var(--muted)";
     tr.innerHTML = `
       <td>${c.channel}</td>
-      <td>${c.total}</td>
-      <td>${c.targets_hit}</td>
-      <td>${c.sl_hit}</td>
-      <td>${c.partial}</td>
-      <td>${c.pending}</td>
+      <td>${sourceLabel(c.source)}</td>
+      <td>${c.total_signals}</td>
       <td>${c.hit_rate != null ? c.hit_rate + "%" : "n/a"}</td>
       <td>${c.avg_score != null ? c.avg_score : "n/a"}</td>
+      <td>${c.trades_closed}</td>
+      <td>${c.win_rate != null ? c.win_rate + "%" : "n/a"}</td>
+      <td style="color:${pnlColor}">${c.trades_closed ? formatPnl(c.total_pnl) : "n/a"}</td>
+      <td>${c.avg_pnl != null ? formatPnl(c.avg_pnl) : "n/a"}</td>
     `;
     tbody.appendChild(tr);
   });
+}
+
+function sourceLabel(source) {
+  return { scanner: "F&O Scanner", telegram: "Telegram", manual: "Manual" }[source] || source;
+}
+
+function formatPnl(v) {
+  return (v > 0 ? "+" : "") + v.toFixed(2);
+}
+
+function renderReliabilitySummary(summary) {
+  const tiles = [
+    ["Total paper trades", summary.total_trades],
+    ["Overall win rate", summary.win_rate != null ? summary.win_rate + "%" : "-"],
+    ["Total paper P&L", summary.total_trades ? formatPnl(summary.total_pnl) : "-"],
+    ["Most reliable", summary.best_channel || "-"],
+    ["Least reliable", summary.worst_channel || "-"],
+  ];
+  $("reliability-summary-grid").innerHTML = tiles
+    .map(([label, value]) => `<div class="summary-tile"><div class="tile-value">${value}</div><div class="tile-label">${label}</div></div>`)
+    .join("");
+}
+
+function renderEquityCurve(curve) {
+  const panel = $("equity-curve-panel");
+  const container = $("equity-curve-container");
+  if (!curve || curve.length < 2) {
+    panel.classList.toggle("hidden", !curve || curve.length === 0);
+    container.innerHTML = `<div style="color:var(--muted);font-size:12px">Not enough closed paper trades yet to plot a curve.</div>`;
+    return;
+  }
+  panel.classList.remove("hidden");
+
+  const w = 700, h = 180, pad = 8;
+  const values = curve.map((p) => p.cumulative_pnl);
+  const min = Math.min(0, ...values);
+  const max = Math.max(0, ...values);
+  const range = max - min || 1;
+  const xStep = (w - pad * 2) / (curve.length - 1);
+  const yFor = (v) => h - pad - ((v - min) / range) * (h - pad * 2);
+  const points = curve.map((p, i) => `${pad + i * xStep},${yFor(p.cumulative_pnl)}`).join(" ");
+  const zeroY = yFor(0);
+  const last = values[values.length - 1];
+  const color = last >= 0 ? "var(--green)" : "var(--red)";
+
+  container.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:180px">
+      <line x1="${pad}" y1="${zeroY}" x2="${w - pad}" y2="${zeroY}" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,4" />
+      <polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" />
+    </svg>
+    <div class="row" style="justify-content:space-between;color:var(--muted);font-size:11px">
+      <span>${curve[0].day}</span>
+      <span>${curve[curve.length - 1].day}</span>
+    </div>
+  `;
 }
 
 // ---- Positions ----

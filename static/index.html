@@ -507,10 +507,28 @@ Target 16/18/20/24/30+"></textarea>
     <!-- STATS TAB -->
     <section id="view-stats" class="hidden">
       <div class="panel">
+        <h2>Reliability overview</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+          Every source that auto-paper-trades (F&amp;O Scanner, each Telegram channel, manual) side
+          by side, so you can see which one is actually worth trusting -- not just signal hit rate,
+          but real paper P&amp;L per source.
+        </div>
+        <div class="summary-grid" id="reliability-summary-grid"></div>
+      </div>
+
+      <div class="panel" id="equity-curve-panel">
+        <h2>Cumulative paper P&amp;L</h2>
+        <div id="equity-curve-container"></div>
+      </div>
+
+      <div class="panel">
         <h2>Channel track record</h2>
         <table id="stats-table">
           <thead>
-            <tr><th>Channel</th><th>Total</th><th>Targets hit</th><th>SL hit</th><th>Partial</th><th>Pending</th><th>Hit rate</th><th>Avg score</th></tr>
+            <tr>
+              <th>Channel</th><th>Source</th><th>Signals</th><th>Hit rate</th><th>Avg score</th>
+              <th>Trades</th><th>Win rate</th><th>Total P&amp;L</th><th>Avg P&amp;L</th>
+            </tr>
           </thead>
           <tbody></tbody>
         </table>

@@ -296,6 +296,11 @@ def get_channel_stats(user_id: int = Depends(current_user_id)):
     return db.channel_stats(user_id)
 
 
+@app.get("/api/stats/reliability")
+def get_reliability_dashboard(user_id: int = Depends(current_user_id)):
+    return db.reliability_dashboard(user_id)
+
+
 @app.get("/api/market/ticker")
 def get_market_ticker():
     return market.fetch_index_quotes()
