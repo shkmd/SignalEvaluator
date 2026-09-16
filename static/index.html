@@ -652,9 +652,14 @@ Target 16/18/20/24/30+"></textarea>
           <h2 style="margin:0">Open Positions</h2>
           <span id="positions-summary" style="color:var(--muted);font-size:12px"></span>
         </div>
+        <div class="scanner-filter-tabs" style="margin-top:12px">
+          <button class="filter-tab active" data-filter="ALL">All</button>
+          <button class="filter-tab" data-filter="FNO">F&amp;O</button>
+          <button class="filter-tab" data-filter="SWING">Swing</button>
+        </div>
         <table id="positions-table" style="margin-top:14px">
           <thead>
-            <tr><th>ID</th><th>Mode</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>SL</th><th>Target</th><th></th></tr>
+            <tr><th>ID</th><th>Category</th><th>Mode</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>SL</th><th>Target</th><th></th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -664,10 +669,18 @@ Target 16/18/20/24/30+"></textarea>
     <!-- ORDER BOOK TAB -->
     <section id="view-orderbook" class="hidden">
       <div class="panel">
-        <h2>Order Book</h2>
+        <div class="channels-header">
+          <h2 style="margin:0">Order Book</h2>
+          <span id="orderbook-summary" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <div class="scanner-filter-tabs" style="margin-top:12px">
+          <button class="filter-tab active" data-filter="ALL">All</button>
+          <button class="filter-tab" data-filter="FNO">F&amp;O</button>
+          <button class="filter-tab" data-filter="SWING">Swing</button>
+        </div>
         <table id="orderbook-table" style="margin-top:14px">
           <thead>
-            <tr><th>ID</th><th>Created</th><th>Mode</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Status</th></tr>
+            <tr><th>ID</th><th>Created</th><th>Category</th><th>Mode</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Status</th></tr>
           </thead>
           <tbody></tbody>
         </table>

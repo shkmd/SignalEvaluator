@@ -1236,22 +1236,26 @@ async function loadStats() {
 // ---- Positions ----
 async function loadPositions() {
   const res = await fetch("/api/trading/positions");
-  const rows = await res.json();
+  const allRows = await res.json();
   const summaryRes = await fetch("/api/trading/pnl-summary");
   const summary = await summaryRes.json();
+  const fnoCount = allRows.filter((o) => o.instrument === "CE" || o.instrument === "PE").length;
   $("positions-summary").textContent =
-    `${summary.open_positions} open · realized today: ${summary.realized_today >= 0 ? "+" : ""}${summary.realized_today}`;
+    `${summary.open_positions} open (${fnoCount} F&O, ${allRows.length - fnoCount} Swing) · ` +
+    `realized today: ${summary.realized_today >= 0 ? "+" : ""}${summary.realized_today}`;
 
+  const rows = allRows.filter((o) => matchesCategory(o.instrument, _positionsFilter));
   const tbody = document.querySelector("#positions-table tbody");
   tbody.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" style="color:var(--muted)">No open positions. Enable auto-trade in Broker Setup, or positions will appear here once a signal clears your score threshold.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--muted)">No open positions${_positionsFilter !== "ALL" ? " for this filter" : ""}. Enable auto-trade in Broker Setup, or positions will appear here once a signal clears your score threshold.</td></tr>`;
     return;
   }
   rows.forEach((o) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${o.id}</td>
+      <td>${categoryBadge(o.instrument)}</td>
       <td><span class="badge ${o.mode === "live" ? "negative" : "neutral"}">${o.mode}</span></td>
       <td>${o.resolved_symbol || o.symbol}${o.instrument !== "EQ" ? " " + o.strike + o.instrument : ""}</td>
       <td>${o.side}</td>
@@ -1272,11 +1276,15 @@ async function loadPositions() {
 // ---- Order book ----
 async function loadOrderBook() {
   const res = await fetch("/api/trading/orders");
-  const rows = await res.json();
+  const allRows = await res.json();
+  const fnoCount = allRows.filter((o) => o.instrument === "CE" || o.instrument === "PE").length;
+  $("orderbook-summary").textContent = `${allRows.length} total (${fnoCount} F&O, ${allRows.length - fnoCount} Swing)`;
+
+  const rows = allRows.filter((o) => matchesCategory(o.instrument, _orderbookFilter));
   const tbody = document.querySelector("#orderbook-table tbody");
   tbody.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--muted)">No orders yet.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" style="color:var(--muted)">No orders yet${_orderbookFilter !== "ALL" ? " for this filter" : ""}.</td></tr>`;
     return;
   }
   rows.forEach((o) => {
@@ -1285,6 +1293,7 @@ async function loadOrderBook() {
     tr.innerHTML = `
       <td>${o.id}</td>
       <td>${(o.created_at || "").slice(0, 16).replace("T", " ")}</td>
+      <td>${categoryBadge(o.instrument)}</td>
       <td><span class="badge ${o.mode === "live" ? "negative" : "neutral"}">${o.mode}</span></td>
       <td>${o.resolved_symbol || o.symbol}${o.instrument !== "EQ" ? " " + o.strike + o.instrument : ""}</td>
       <td>${o.side}</td>
@@ -2045,12 +2054,45 @@ function renderScannerSummary(run) {
     .join("");
 }
 
-document.querySelectorAll(".filter-tab").forEach((btn) => {
+document.querySelectorAll("#view-scanner .filter-tab").forEach((btn) => {
   btn.onclick = () => {
-    document.querySelectorAll(".filter-tab").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll("#view-scanner .filter-tab").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     _scannerFilter = btn.dataset.filter;
     loadScannerResults();
+  };
+});
+
+// Shared by Positions and Order Book: "F&O" = an options leg (CE/PE), "Swing" = equity (EQ).
+function categoryBadge(instrument) {
+  return instrument === "CE" || instrument === "PE"
+    ? `<span class="dir-badge ce">F&amp;O</span>`
+    : `<span class="dir-badge near">Swing</span>`;
+}
+function matchesCategory(instrument, filter) {
+  const isFno = instrument === "CE" || instrument === "PE";
+  if (filter === "FNO") return isFno;
+  if (filter === "SWING") return !isFno;
+  return true;
+}
+
+let _positionsFilter = "ALL";
+document.querySelectorAll("#view-positions .filter-tab").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("#view-positions .filter-tab").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    _positionsFilter = btn.dataset.filter;
+    loadPositions();
+  };
+});
+
+let _orderbookFilter = "ALL";
+document.querySelectorAll("#view-orderbook .filter-tab").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("#view-orderbook .filter-tab").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    _orderbookFilter = btn.dataset.filter;
+    loadOrderBook();
   };
 });
 
