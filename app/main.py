@@ -11,7 +11,7 @@ from typing import Optional, List
 
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
-from app import fo_universe, scanner, telegram_broadcast, strategies as strategies_mod, backtest as backtest_mod
+from app import fo_universe, scanner, telegram_broadcast, alerts, strategies as strategies_mod, backtest as backtest_mod
 from app.brokers import kite as kite_broker, upstox as upstox_broker, dhan as dhan_broker
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from app.telegram_client import reset_client
@@ -253,6 +253,7 @@ def evaluate(req: EvaluateRequest, user_id: int = Depends(current_user_id)):
         saved = db.get_signal(user_id, signal_id)
         evaluation["lot_size"] = saved.get("lot_size") if saved else None
         telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
+        alerts.maybe_alert_signal(user_id, signal, evaluation, signal_id)
 
     return evaluation
 
@@ -859,6 +860,40 @@ def save_telegram_paper_trade_settings(req: TelegramPaperTradeSettingsRequest, u
     if not (0 <= req.min_score <= 100):
         raise HTTPException(status_code=400, detail="min_score must be between 0 and 100")
     return db.save_telegram_paper_trade_settings(user_id, req.enabled, req.min_score)
+
+
+class AlertSettingsRequest(BaseModel):
+    enabled: bool
+    min_score: float = 80
+    sl_proximity_pct: float = 2.0
+
+
+@app.get("/api/alerts/settings")
+def get_alert_settings(user_id: int = Depends(current_user_id)):
+    return db.get_alert_settings(user_id)
+
+
+@app.post("/api/alerts/settings")
+def save_alert_settings(req: AlertSettingsRequest, user_id: int = Depends(current_user_id)):
+    if not (0 <= req.min_score <= 100):
+        raise HTTPException(status_code=400, detail="min_score must be between 0 and 100")
+    if not (0 < req.sl_proximity_pct <= 20):
+        raise HTTPException(status_code=400, detail="sl_proximity_pct must be between 0 and 20")
+    return db.save_alert_settings(user_id, req.enabled, req.min_score, req.sl_proximity_pct)
+
+
+@app.post("/api/alerts/test")
+async def send_test_alert(user_id: int = Depends(current_user_id)):
+    from app.telegram_client import get_client
+
+    client = get_client(user_id)
+    if not client.is_connected():
+        await client.connect()
+    if not await client.is_user_authorized():
+        raise HTTPException(status_code=400, detail="Telegram session isn't logged in -- log in again from the Telegram tab.")
+    text = "\U0001F9EA TEST ALERT -- verifying your personal alerts are wired up, please ignore."
+    await client.send_message("me", text)
+    return {"sent": True}
 
 
 app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")

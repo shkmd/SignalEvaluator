@@ -270,6 +270,18 @@ CREATE TABLE IF NOT EXISTS telegram_paper_trade_settings (
     min_score REAL NOT NULL DEFAULT 70,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+-- Personal alerts (sent to the user's own Telegram Saved Messages, via their already-
+-- connected Telethon session -- no target chat to configure, unlike telegram_broadcast_settings
+-- which posts to a channel other people see). Two triggers: a new signal clearing min_score,
+-- and an open position's price moving within sl_proximity_pct of its stop-loss.
+CREATE TABLE IF NOT EXISTS alert_settings (
+    user_id INTEGER PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    min_score REAL NOT NULL DEFAULT 80,
+    sl_proximity_pct REAL NOT NULL DEFAULT 2.0,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 """
 
 
@@ -334,6 +346,11 @@ def init_db():
         ats_cols = {c["name"] for c in conn.execute("PRAGMA table_info(auto_trade_settings)").fetchall()}
         if "position_sizing_enabled" not in ats_cols:
             conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN position_sizing_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+
+        orders_cols = {c["name"] for c in conn.execute("PRAGMA table_info(orders)").fetchall()}
+        if "sl_alert_sent" not in orders_cols:
+            conn.execute("ALTER TABLE orders ADD COLUMN sl_alert_sent INTEGER NOT NULL DEFAULT 0")
             conn.commit()
     finally:
         conn.close()
@@ -1653,5 +1670,47 @@ def save_telegram_paper_trade_settings(user_id: int, enabled: bool, min_score: f
         )
         conn.commit()
         return get_telegram_paper_trade_settings(user_id)
+    finally:
+        conn.close()
+
+
+# ---- Personal alerts (per user) ----
+
+def get_alert_settings(user_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM alert_settings WHERE user_id = ?", (user_id,)).fetchone()
+        if not row:
+            return {"user_id": user_id, "enabled": False, "min_score": 80, "sl_proximity_pct": 2.0}
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def save_alert_settings(user_id: int, enabled: bool, min_score: float, sl_proximity_pct: float) -> dict:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO alert_settings (user_id, enabled, min_score, sl_proximity_pct)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                min_score = excluded.min_score,
+                sl_proximity_pct = excluded.sl_proximity_pct
+            """,
+            (user_id, 1 if enabled else 0, min_score, sl_proximity_pct),
+        )
+        conn.commit()
+        return get_alert_settings(user_id)
+    finally:
+        conn.close()
+
+
+def mark_sl_alert_sent(order_id: int) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE orders SET sl_alert_sent = 1 WHERE id = ?", (order_id,))
+        conn.commit()
     finally:
         conn.close()

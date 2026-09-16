@@ -9,7 +9,7 @@ than silently doing nothing -- see place_live_order() below.
 """
 import yfinance as yf
 
-from app import db, options as options_mod, technicals
+from app import alerts, db, options as options_mod, technicals
 
 
 def get_live_price(resolved_symbol: str, instrument: str, strike: float) -> dict:
@@ -269,9 +269,26 @@ def _calc_pnl(order: dict, exit_price: float) -> float:
     return round((entry - exit_price) * qty, 2)
 
 
+def _check_hit(order: dict, price: float) -> str | None:
+    if order["side"] == "buy":
+        if order["sl"] and price <= order["sl"]:
+            return "sl_hit"
+        if order["target"] and price >= order["target"]:
+            return "target_hit"
+    else:
+        if order["sl"] and price >= order["sl"]:
+            return "sl_hit"
+        if order["target"] and price <= order["target"]:
+            return "target_hit"
+    return None
+
+
 def monitor_open_positions() -> list:
     """Checks every open paper position (across all users) against its SL/target using a
-    live price. Meant to be called periodically by a background task."""
+    live price, auto-closing on a hit. Also checks open LIVE positions for SL proximity only
+    (no auto-close -- live has no bracket-exit order wired up yet, see place_live_order()) so
+    the SL-approaching alert can fire there too. Meant to be called periodically by a
+    background task."""
     closed = []
     for order in db.list_all_open_orders(mode="paper"):
         price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"])
@@ -279,17 +296,7 @@ def monitor_open_positions() -> list:
             continue
         price = price_info["price"]
 
-        hit = None
-        if order["side"] == "buy":
-            if order["sl"] and price <= order["sl"]:
-                hit = "sl_hit"
-            elif order["target"] and price >= order["target"]:
-                hit = "target_hit"
-        else:
-            if order["sl"] and price >= order["sl"]:
-                hit = "sl_hit"
-            elif order["target"] and price <= order["target"]:
-                hit = "target_hit"
+        hit = _check_hit(order, price)
 
         if hit:
             pnl = _calc_pnl(order, price)
@@ -303,4 +310,17 @@ def monitor_open_positions() -> list:
             if order.get("signal_id"):
                 db.update_outcome(order["user_id"], order["signal_id"], hit)
             closed.append({"order_id": order["id"], "reason": hit, "exit_price": price, "pnl": pnl})
+        elif not order.get("sl_alert_sent"):
+            if alerts.maybe_alert_sl_proximity(order["user_id"], order, price):
+                db.mark_sl_alert_sent(order["id"])
+
+    for order in db.list_all_open_orders(mode="live"):
+        if order.get("sl_alert_sent"):
+            continue
+        price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"])
+        if not price_info["available"]:
+            continue
+        if alerts.maybe_alert_sl_proximity(order["user_id"], order, price_info["price"]):
+            db.mark_sl_alert_sent(order["id"])
+
     return closed

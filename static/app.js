@@ -875,6 +875,7 @@ async function loadTelegramTab() {
   await refreshTelegramChannels();
   await loadBroadcastSettings();
   await loadTelegramPaperTradeSettings();
+  await loadAlertSettings();
 }
 
 async function loadBroadcastSettings() {
@@ -967,6 +968,52 @@ $("chk-telegram-paper-trade").onchange = (e) =>
   saveTelegramPaperTradeSettings(e.target.checked ? "Paper-trading enabled." : "Paper-trading disabled.");
 $("inp-telegram-paper-trade-min-score").onchange = () =>
   saveTelegramPaperTradeSettings(`Min score: ${$("inp-telegram-paper-trade-min-score").value}.`);
+
+async function loadAlertSettings() {
+  const res = await fetch("/api/alerts/settings");
+  const s = await res.json();
+  $("alert-enabled").value = String(!!s.enabled);
+  $("alert-min-score").value = s.min_score ?? 80;
+  $("alert-sl-proximity").value = s.sl_proximity_pct ?? 2.0;
+}
+
+$("btn-save-alert-settings").onclick = async () => {
+  const statusEl = $("alert-settings-status");
+  const payload = {
+    enabled: $("alert-enabled").value === "true",
+    min_score: parseFloat($("alert-min-score").value) || 0,
+    sl_proximity_pct: parseFloat($("alert-sl-proximity").value) || 2.0,
+  };
+  statusEl.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/alerts/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
+    statusEl.textContent = "Saved.";
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+};
+
+$("btn-send-alert-test").onclick = async () => {
+  const statusEl = $("alert-settings-status");
+  const btn = $("btn-send-alert-test");
+  btn.disabled = true;
+  statusEl.textContent = "Sending test alert…";
+  try {
+    const res = await fetch("/api/alerts/test", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Send failed");
+    statusEl.textContent = "Sent to your Saved Messages. Check Telegram.";
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 async function refreshTelegramStatus() {
   const badge = $("telegram-status-badge");

@@ -681,6 +681,35 @@ Target 16/18/20/24/30+"></textarea>
           <span id="telegram-paper-trade-status" style="color:var(--muted);font-size:12px"></span>
         </div>
       </div>
+
+      <div class="panel">
+        <h2>Personal Alerts</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+          Sent straight to your own Telegram "Saved Messages" via your connected session -- no
+          channel to set up, just you. Two triggers: a new signal (from any source) clearing the
+          score below, and an open position's price moving within the given % of its stop-loss
+          (checked every minute, paper and live both, alerted once per position).
+        </div>
+        <div class="grid" style="grid-template-columns: repeat(3, 1fr)">
+          <label>Alerts
+            <select id="alert-enabled">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+          </label>
+          <label>Min score for signal alert
+            <input id="alert-min-score" type="number" min="0" max="100" step="1" />
+          </label>
+          <label>SL proximity %
+            <input id="alert-sl-proximity" type="number" min="0.1" max="20" step="0.1" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" id="btn-save-alert-settings">Save alert settings</button>
+          <button class="secondary" id="btn-send-alert-test">Send test alert</button>
+          <span id="alert-settings-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+      </div>
     </section>
 
     <!-- POSITIONS TAB -->

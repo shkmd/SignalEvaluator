@@ -5,7 +5,7 @@ import asyncio
 
 from telethon import events
 
-from app import db, scoring, trading, screener, stock_score, telegram_broadcast
+from app import db, scoring, trading, screener, stock_score, telegram_broadcast, alerts
 from app import parser as signal_parser
 from app import technicals, options as options_mod, news as news_mod
 from app.telegram_client import get_client, register_active_loop
@@ -167,6 +167,7 @@ def _evaluate_and_store(user_id: int, parsed: dict, chat_id: int, message_id: in
             print(f"[trading] user {user_id}: paper order #{trade_result['order_id']} placed for signal #{signal_id}")
         _maybe_paper_trade(user_id, signal_id, signal, evaluation)
         telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
+        alerts.maybe_alert_signal(user_id, signal, evaluation, signal_id)
 
 
 def _maybe_paper_trade(user_id: int, signal_id: int, signal: dict, evaluation: dict) -> None:
