@@ -258,8 +258,19 @@ def evaluate(req: EvaluateRequest, user_id: int = Depends(current_user_id)):
 
 
 @app.get("/api/signals")
-def get_signals(channel: Optional[str] = None, outcome: Optional[str] = None, user_id: int = Depends(current_user_id)):
-    return db.list_signals(user_id, channel=channel, outcome=outcome)
+def get_signals(
+    channel: Optional[str] = None,
+    outcome: Optional[str] = None,
+    source: Optional[str] = None,
+    signal_type: Optional[str] = None,
+    user_id: int = Depends(current_user_id),
+):
+    return db.list_signals(user_id, channel=channel, outcome=outcome, source=source, signal_type=signal_type)
+
+
+@app.get("/api/signals/channels")
+def get_signal_channels(user_id: int = Depends(current_user_id)):
+    return db.list_distinct_channels(user_id)
 
 
 @app.get("/api/signals/{signal_id}")

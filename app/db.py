@@ -527,7 +527,14 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     return d
 
 
-def list_signals(user_id: int, channel: str = None, outcome: str = None, limit: int = 200) -> list:
+def list_signals(
+    user_id: int,
+    channel: str = None,
+    outcome: str = None,
+    source: str = None,
+    signal_type: str = None,
+    limit: int = 200,
+) -> list:
     conn = _conn()
     try:
         query = "SELECT * FROM signals WHERE user_id = ?"
@@ -538,10 +545,27 @@ def list_signals(user_id: int, channel: str = None, outcome: str = None, limit: 
         if outcome:
             query += " AND outcome = ?"
             params.append(outcome)
+        if source:
+            query += " AND source = ?"
+            params.append(source)
+        if signal_type:
+            query += " AND signal_type = ?"
+            params.append(signal_type)
         query += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
         rows = conn.execute(query, params).fetchall()
         return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_distinct_channels(user_id: int) -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT channel FROM signals WHERE user_id = ? ORDER BY channel", (user_id,)
+        ).fetchall()
+        return [r["channel"] for r in rows]
     finally:
         conn.close()
 

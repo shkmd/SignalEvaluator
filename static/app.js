@@ -686,10 +686,57 @@ function renderSignalRows(rows, tableSelector) {
   });
 }
 
+let _historyFiltersInitialized = false;
+const HIST_FILTER_IDS = ["hist-filter-channel", "hist-filter-source", "hist-filter-type", "hist-filter-verdict", "hist-filter-outcome"];
+
 async function loadHistory() {
-  const res = await fetch("/api/signals");
-  const rows = await res.json();
+  if (!_historyFiltersInitialized) {
+    _historyFiltersInitialized = true;
+    await populateHistoryChannelFilter();
+    HIST_FILTER_IDS.forEach((id) => ($(id).onchange = loadHistory));
+    $("btn-reset-history-filters").onclick = (e) => {
+      e.preventDefault();
+      HIST_FILTER_IDS.forEach((id) => ($(id).value = ""));
+      loadHistory();
+    };
+  }
+
+  const params = new URLSearchParams();
+  const channel = $("hist-filter-channel").value;
+  const source = $("hist-filter-source").value;
+  const type = $("hist-filter-type").value;
+  const outcome = $("hist-filter-outcome").value;
+  if (channel) params.set("channel", channel);
+  if (source) params.set("source", source);
+  if (type) params.set("signal_type", type);
+  if (outcome) params.set("outcome", outcome);
+
+  const res = await fetch(`/api/signals?${params.toString()}`);
+  let rows = await res.json();
+
+  const verdictTier = $("hist-filter-verdict").value;
+  if (verdictTier) {
+    rows = rows.filter((s) => {
+      if (verdictTier === "strong") return s.score >= 70;
+      if (verdictTier === "moderate") return s.score >= 50 && s.score < 70;
+      return s.score < 50;
+    });
+  }
+
   renderSignalRows(rows, "#history-table");
+}
+
+async function populateHistoryChannelFilter() {
+  const sel = $("hist-filter-channel");
+  try {
+    const res = await fetch("/api/signals/channels");
+    const channels = await res.json();
+    const prev = sel.value;
+    sel.innerHTML = `<option value="">All channels</option>` + channels.map((c) => `<option value="${c}">${c}</option>`).join("");
+    sel.value = channels.includes(prev) ? prev : "";
+  } catch (e) {
+    // leave just "All channels"
+  }
 }
 
 // ---- Dashboard (home) ----

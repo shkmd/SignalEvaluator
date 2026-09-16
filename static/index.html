@@ -433,7 +433,52 @@ Target 16/18/20/24/30+"></textarea>
     <!-- HISTORY TAB -->
     <section id="view-history" class="hidden">
       <div class="panel">
-        <h2>Signal history</h2>
+        <div class="channels-header">
+          <h2 style="margin:0">Signal history</h2>
+          <a href="#" id="btn-reset-history-filters" class="close-link">Reset filters</a>
+        </div>
+        <div class="row" style="margin-top:4px">
+          <label style="font-size:12px;color:var(--muted)">Channel
+            <select id="hist-filter-channel" style="display:block;margin-top:4px;min-width:160px">
+              <option value="">All channels</option>
+            </select>
+          </label>
+          <label style="font-size:12px;color:var(--muted)">Source
+            <select id="hist-filter-source" style="display:block;margin-top:4px">
+              <option value="">All sources</option>
+              <option value="manual">Manual</option>
+              <option value="telegram">Telegram</option>
+              <option value="scanner">F&amp;O Scanner</option>
+            </select>
+          </label>
+          <label style="font-size:12px;color:var(--muted)">Type
+            <select id="hist-filter-type" style="display:block;margin-top:4px">
+              <option value="">All types</option>
+              <option value="positional">Positional</option>
+              <option value="intraday">Intraday</option>
+              <option value="btst">BTST</option>
+              <option value="swing">Swing</option>
+              <option value="scalp">Scalp</option>
+            </select>
+          </label>
+          <label style="font-size:12px;color:var(--muted)">Verdict
+            <select id="hist-filter-verdict" style="display:block;margin-top:4px">
+              <option value="">All verdicts</option>
+              <option value="strong">Strong (score &ge;70)</option>
+              <option value="moderate">Moderate (50-69)</option>
+              <option value="weak">Weak (&lt;50)</option>
+            </select>
+          </label>
+          <label style="font-size:12px;color:var(--muted)">Outcome
+            <select id="hist-filter-outcome" style="display:block;margin-top:4px">
+              <option value="">All outcomes</option>
+              <option value="pending">Pending</option>
+              <option value="target_hit">Target hit</option>
+              <option value="sl_hit">SL hit</option>
+              <option value="partial">Partial</option>
+            </select>
+          </label>
+        </div>
         <table id="history-table">
           <thead>
             <tr><th>ID</th><th>Src</th><th>Channel</th><th>Symbol</th><th>Type</th><th>Buy</th><th>SL</th><th>Target</th><th>Lot</th><th>Max Profit</th><th>Max Loss</th><th>Score</th><th>Verdict</th><th>Outcome</th></tr>
