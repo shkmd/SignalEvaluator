@@ -755,6 +755,19 @@ Target 16/18/20/24/30+"></textarea>
             <input id="at-max-loss" type="number" step="1" placeholder="e.g. 5000" />
           </label>
         </div>
+        <div class="row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="at-position-sizing" style="width:auto" />
+            Risk-based position sizing
+          </label>
+        </div>
+        <div style="color:var(--muted);font-size:12px;margin-top:4px">
+          When on, "Quantity per trade" above becomes a base size that's scaled by each channel's
+          own historical paper win-rate -- a channel winning above 50% of the time trades larger,
+          below 50% trades smaller (clamped 0.5x-2x), once it has at least 5 closed paper trades to
+          judge by. Applies to every paper and live trade this Auto-Trade toggle places, across
+          every source. See Channel Stats for each channel's current win rate.
+        </div>
         <div class="row">
           <button class="primary" id="btn-save-at-settings">Save settings</button>
           <span id="at-settings-status" style="color:var(--muted);font-size:12px"></span>

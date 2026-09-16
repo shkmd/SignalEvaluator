@@ -28,6 +28,37 @@ def get_live_price(resolved_symbol: str, instrument: str, strike: float) -> dict
         return {"available": False, "reason": f"Price fetch failed: {e}"}
 
 
+MIN_TRADES_FOR_SIZING = 5
+MIN_SIZE_MULTIPLIER = 0.5
+MAX_SIZE_MULTIPLIER = 2.0
+
+
+def _reliability_multiplier(win_rate: float | None, trades_closed: int) -> float:
+    """50% historical win rate on this channel keeps the base quantity unchanged (1.0x);
+    every point above/below scales it, clamped to 0.5x-2.0x so one hot or cold streak can't
+    swing size too far. Needs MIN_TRADES_FOR_SIZING closed paper trades on the channel first --
+    before that there isn't enough history to size by, so it stays at the base quantity."""
+    if win_rate is None or trades_closed < MIN_TRADES_FOR_SIZING:
+        return 1.0
+    return max(MIN_SIZE_MULTIPLIER, min(MAX_SIZE_MULTIPLIER, win_rate / 50.0))
+
+
+def size_for_reliability(user_id: int, signal_id: int, base_quantity: float) -> float:
+    """Scales base_quantity by the linked signal's channel's historical paper win-rate, when
+    the user has risk-based position sizing turned on (auto_trade_settings.position_sizing_enabled
+    -- one shared per-user toggle, since this applies uniformly regardless of which auto-trade
+    path placed the order)."""
+    settings = db.get_auto_trade_settings(user_id)
+    if not settings.get("position_sizing_enabled"):
+        return base_quantity
+    signal = db.get_signal(user_id, signal_id)
+    if not signal:
+        return base_quantity
+    reliability = db.channel_reliability(user_id, signal["channel"])
+    multiplier = _reliability_multiplier(reliability["win_rate"], reliability["trades_closed"])
+    return max(1, round(base_quantity * multiplier))
+
+
 def auto_trade_check(user_id: int, signal_id: int, signal: dict, evaluation: dict) -> dict | None:
     """Called right after every evaluation (manual or Telegram-auto). Places a paper (or,
     once wired, live) order if this user's auto-trade is enabled and the signal clears the bar."""
@@ -58,6 +89,7 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
 
     price_info = get_live_price(resolved_symbol, instrument, strike)
     entry_price = price_info["price"] if price_info["available"] else (signal.get("entry_high") or signal.get("entry_low"))
+    quantity = size_for_reliability(user_id, signal_id, settings["quantity"])
 
     targets = signal.get("targets") or []
     order_id = db.insert_order(
@@ -70,14 +102,14 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
             "instrument": instrument,
             "strike": strike,
             "side": side,
-            "quantity": settings["quantity"],
+            "quantity": quantity,
             "entry_price": entry_price,
             "sl": signal.get("sl"),
             "target": min(targets) if targets and side == "buy" else (max(targets) if targets else None),
             "broker": None,
         },
     )
-    return {"placed": True, "order_id": order_id, "mode": "paper", "entry_price": entry_price}
+    return {"placed": True, "order_id": order_id, "mode": "paper", "entry_price": entry_price, "quantity": quantity}
 
 
 def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dict, settings: dict) -> dict:
@@ -117,7 +149,7 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
 
     resolved_symbol = signal["resolved_symbol"]
     side = "SELL" if evaluation["direction"] == "bearish" else "BUY"
-    quantity = int(settings["quantity"])
+    quantity = int(size_for_reliability(user_id, signal_id, settings["quantity"]))
 
     try:
         broker_order_id, broker_name = _place_equity_order(broker, user_id, resolved_symbol, side, quantity)

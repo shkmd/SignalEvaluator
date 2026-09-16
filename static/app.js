@@ -1591,6 +1591,7 @@ async function loadAutoTradeSettings() {
   $("at-quantity").value = s.quantity;
   $("at-max-positions").value = s.max_open_positions;
   $("at-max-loss").value = s.max_daily_loss ?? "";
+  $("at-position-sizing").checked = !!s.position_sizing_enabled;
   updateLiveWarning();
 }
 
@@ -1613,6 +1614,7 @@ $("btn-save-at-settings").onclick = async () => {
     quantity: parseFloat($("at-quantity").value),
     max_open_positions: parseInt($("at-max-positions").value, 10),
     max_daily_loss: $("at-max-loss").value ? parseFloat($("at-max-loss").value) : null,
+    position_sizing_enabled: $("at-position-sizing").checked,
   };
   statusEl.textContent = "Saving…";
   try {

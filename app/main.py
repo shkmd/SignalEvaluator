@@ -414,6 +414,7 @@ class AutoTradeSettingsRequest(BaseModel):
     quantity: Optional[float] = None
     max_open_positions: Optional[int] = None
     max_daily_loss: Optional[float] = None
+    position_sizing_enabled: Optional[bool] = None
 
 
 @app.get("/api/trading/settings")

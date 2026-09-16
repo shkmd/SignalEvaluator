@@ -330,6 +330,11 @@ def init_db():
         if "strategy_id" not in sr_cols:
             conn.execute("ALTER TABLE scan_runs ADD COLUMN strategy_id TEXT NOT NULL DEFAULT 'range_expansion_v1'")
             conn.commit()
+
+        ats_cols = {c["name"] for c in conn.execute("PRAGMA table_info(auto_trade_settings)").fetchall()}
+        if "position_sizing_enabled" not in ats_cols:
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN position_sizing_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
     finally:
         conn.close()
 
@@ -802,6 +807,7 @@ DEFAULT_SETTINGS = {
     "quantity": 1,
     "max_open_positions": 5,
     "max_daily_loss": None,
+    "position_sizing_enabled": False,
 }
 
 
@@ -832,7 +838,8 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
         conn.execute(
             """
             UPDATE auto_trade_settings
-            SET enabled = ?, mode = ?, min_score = ?, quantity = ?, max_open_positions = ?, max_daily_loss = ?
+            SET enabled = ?, mode = ?, min_score = ?, quantity = ?, max_open_positions = ?, max_daily_loss = ?,
+                position_sizing_enabled = ?
             WHERE user_id = ?
             """,
             (
@@ -842,11 +849,37 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
                 current["quantity"],
                 current["max_open_positions"],
                 current["max_daily_loss"],
+                1 if current["position_sizing_enabled"] else 0,
                 user_id,
             ),
         )
         conn.commit()
         return get_auto_trade_settings(user_id)
+    finally:
+        conn.close()
+
+
+def channel_reliability(user_id: int, channel: str) -> dict:
+    """Historical win rate for one channel's closed paper trades -- the input to risk-based
+    position sizing (see trading.size_for_reliability()). Deliberately narrow (just this one
+    channel) rather than reusing reliability_dashboard(), which computes every channel at once
+    and would be wasteful to call on every single order placement."""
+    conn = _conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(o.id) AS trades_closed,
+                   SUM(CASE WHEN o.pnl > 0 THEN 1 ELSE 0 END) AS wins
+            FROM signals s
+            JOIN orders o ON o.signal_id = s.id AND o.status = 'closed' AND o.mode = 'paper'
+            WHERE s.user_id = ? AND s.channel = ?
+            """,
+            (user_id, channel),
+        ).fetchone()
+        trades_closed = row["trades_closed"] or 0
+        wins = row["wins"] or 0
+        win_rate = round(100 * wins / trades_closed, 1) if trades_closed else None
+        return {"trades_closed": trades_closed, "win_rate": win_rate}
     finally:
         conn.close()
 
