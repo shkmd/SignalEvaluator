@@ -1923,10 +1923,12 @@ async function loadScannerSignalSettings() {
   const s = await res.json();
   $("chk-scanner-signals").checked = !!s.enabled;
   $("sel-strike-preference").value = s.strike_preference || "ATM";
+  $("chk-scanner-paper-trade").checked = !!s.paper_trade_enabled;
+  $("inp-paper-trade-min-score").value = s.paper_trade_min_score ?? 70;
 }
 
-async function saveScannerSignalSettings(statusText) {
-  const statusEl = $("scanner-signals-status");
+async function saveScannerSignalSettings(statusText, statusElId = "scanner-signals-status") {
+  const statusEl = $(statusElId);
   try {
     await fetch("/api/scanner/signal-settings", {
       method: "POST",
@@ -1934,6 +1936,8 @@ async function saveScannerSignalSettings(statusText) {
       body: JSON.stringify({
         enabled: $("chk-scanner-signals").checked,
         strike_preference: $("sel-strike-preference").value,
+        paper_trade_enabled: $("chk-scanner-paper-trade").checked,
+        paper_trade_min_score: parseFloat($("inp-paper-trade-min-score").value) || 70,
       }),
     });
     statusEl.textContent = statusText;
@@ -1944,6 +1948,10 @@ async function saveScannerSignalSettings(statusText) {
 
 $("chk-scanner-signals").onchange = (e) => saveScannerSignalSettings(e.target.checked ? "Enabled." : "Disabled.");
 $("sel-strike-preference").onchange = () => saveScannerSignalSettings(`Strike preference: ${$("sel-strike-preference").value}.`);
+$("chk-scanner-paper-trade").onchange = (e) =>
+  saveScannerSignalSettings(e.target.checked ? "Paper-trading enabled." : "Paper-trading disabled.", "scanner-paper-trade-status");
+$("inp-paper-trade-min-score").onchange = () =>
+  saveScannerSignalSettings(`Min score: ${$("inp-paper-trade-min-score").value}.`, "scanner-paper-trade-status");
 
 async function refreshScannerUniverseCount() {
   try {

@@ -184,6 +184,22 @@
           When an ATM/ITM/OTM option contract is found instead (see Strike above), the entry/SL/target
           are based on that contract's premium.
         </div>
+        <div class="row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="chk-scanner-paper-trade" style="width:auto" />
+            Paper-trade every F&amp;O Scanner signal scoring &ge;
+          </label>
+          <input id="inp-paper-trade-min-score" type="number" min="0" max="100" step="1" value="70" style="width:64px" />
+          <span id="scanner-paper-trade-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <div style="color:var(--muted);font-size:11px;margin-top:6px">
+          Fully simulated -- no money moves, no broker is touched. Positions auto-close on SL/target hit
+          (checked every minute) and the outcome is written straight onto the signal, so Channel Stats'
+          hit-rate for "F&amp;O Scanner" becomes a real, hands-off track record instead of something you
+          mark by hand. This is separate from the Auto-Trade toggle in Broker Setup, which spans every
+          signal source and can be switched to live money -- this one only ever papers, and only scanner
+          signals.
+        </div>
       </div>
 
       <div class="panel">

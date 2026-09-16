@@ -235,6 +235,8 @@ CREATE TABLE IF NOT EXISTS scanner_signal_settings (
     user_id INTEGER PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 0,
     strike_preference TEXT NOT NULL DEFAULT 'ATM',
+    paper_trade_enabled INTEGER NOT NULL DEFAULT 0,
+    paper_trade_min_score REAL NOT NULL DEFAULT 70,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
@@ -306,6 +308,10 @@ def init_db():
         sss_cols = {c["name"] for c in conn.execute("PRAGMA table_info(scanner_signal_settings)").fetchall()}
         if "strike_preference" not in sss_cols:
             conn.execute("ALTER TABLE scanner_signal_settings ADD COLUMN strike_preference TEXT NOT NULL DEFAULT 'ATM'")
+            conn.commit()
+        if "paper_trade_enabled" not in sss_cols:
+            conn.execute("ALTER TABLE scanner_signal_settings ADD COLUMN paper_trade_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.execute("ALTER TABLE scanner_signal_settings ADD COLUMN paper_trade_min_score REAL NOT NULL DEFAULT 70")
             conn.commit()
 
         sr_cols = {c["name"] for c in conn.execute("PRAGMA table_info(scan_runs)").fetchall()}
@@ -1369,21 +1375,38 @@ def get_scanner_signal_settings(user_id: int) -> dict:
     try:
         row = conn.execute("SELECT * FROM scanner_signal_settings WHERE user_id = ?", (user_id,)).fetchone()
         if not row:
-            return {"user_id": user_id, "enabled": False, "strike_preference": "ATM"}
-        return dict(row)
+            return {
+                "user_id": user_id, "enabled": False, "strike_preference": "ATM",
+                "paper_trade_enabled": False, "paper_trade_min_score": 70,
+            }
+        d = dict(row)
+        d["paper_trade_enabled"] = bool(d["paper_trade_enabled"])
+        return d
     finally:
         conn.close()
 
 
-def save_scanner_signal_settings(user_id: int, enabled: bool, strike_preference: str = "ATM") -> dict:
+def save_scanner_signal_settings(
+    user_id: int,
+    enabled: bool,
+    strike_preference: str = "ATM",
+    paper_trade_enabled: bool = False,
+    paper_trade_min_score: float = 70,
+) -> dict:
     conn = _conn()
     try:
         conn.execute(
             """
-            INSERT INTO scanner_signal_settings (user_id, enabled, strike_preference) VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled, strike_preference = excluded.strike_preference
+            INSERT INTO scanner_signal_settings
+                (user_id, enabled, strike_preference, paper_trade_enabled, paper_trade_min_score)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                strike_preference = excluded.strike_preference,
+                paper_trade_enabled = excluded.paper_trade_enabled,
+                paper_trade_min_score = excluded.paper_trade_min_score
             """,
-            (user_id, 1 if enabled else 0, strike_preference),
+            (user_id, 1 if enabled else 0, strike_preference, 1 if paper_trade_enabled else 0, paper_trade_min_score),
         )
         conn.commit()
         return get_scanner_signal_settings(user_id)

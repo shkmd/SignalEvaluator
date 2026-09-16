@@ -262,5 +262,13 @@ def monitor_open_positions() -> list:
         if hit:
             pnl = _calc_pnl(order, price)
             db.close_order(order["id"], price, hit, pnl)
+            # An automatic SL/target exit is exactly what "outcome" means for the linked
+            # signal too, so sync it here -- this is what turns Channel Stats' hit-rate for
+            # a source like "F&O Scanner" into a real, automatically-computed number instead
+            # of something the user has to set by hand on every row. A *manual* close (see
+            # close_order() above) intentionally does not touch this -- that's the user's own
+            # call, not an automatic outcome.
+            if order.get("signal_id"):
+                db.update_outcome(order["user_id"], order["signal_id"], hit)
             closed.append({"order_id": order["id"], "reason": hit, "exit_price": price, "pnl": pnl})
     return closed

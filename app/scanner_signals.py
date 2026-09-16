@@ -155,5 +155,31 @@ def _generate_one(user_id: int, result: dict, classification: str) -> int:
     signal_id = db.insert_signal(user_id, signal, evaluation, "F&O Scanner", source="scanner")
     if signal_id:
         trading.auto_trade_check(user_id, signal_id, signal, evaluation)
+        _maybe_paper_trade(user_id, signal_id, signal, evaluation)
         telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
     return signal_id
+
+
+def _maybe_paper_trade(user_id: int, signal_id: int, signal: dict, evaluation: dict) -> None:
+    """Dedicated paper-trading for F&O Scanner signals -- separate from the general Broker
+    Setup auto-trade toggle (which spans every signal source and can be set to live mode).
+    This is specifically about building a real forward-tested track record for the scanner +
+    strategy combo, gated on its own score threshold (default 70, i.e. "Strong setup"), so a
+    user doesn't have to turn on the general auto-trade toggle (with its live-mode option)
+    just to see how reliable the scanner actually is. Positions close automatically on SL/
+    target hit via trading.monitor_open_positions(), which also syncs the outcome back onto
+    this signal -- so Channel Stats' hit-rate for "F&O Scanner" becomes a real, hands-off
+    number instead of something the user has to mark by hand."""
+    settings = db.get_scanner_signal_settings(user_id)
+    if not settings.get("paper_trade_enabled"):
+        return
+    if (evaluation.get("score") or 0) < settings.get("paper_trade_min_score", 70):
+        return
+    if not signal.get("entry_low") and not signal.get("entry_high"):
+        return
+    if not signal.get("sl"):
+        return
+    try:
+        trading.place_paper_order(user_id, signal_id, signal, evaluation, {"quantity": signal.get("lot_size") or 1})
+    except Exception as e:
+        print(f"[scanner] Paper trade failed for signal {signal_id}: {e}")

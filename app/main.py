@@ -701,6 +701,8 @@ def export_scanner_csv(
 class ScannerSignalSettingsRequest(BaseModel):
     enabled: bool
     strike_preference: str = "ATM"
+    paper_trade_enabled: bool = False
+    paper_trade_min_score: float = 70
 
 
 @app.get("/api/scanner/signal-settings")
@@ -713,7 +715,11 @@ def save_scanner_signal_settings(req: ScannerSignalSettingsRequest, user_id: int
     strike_pref = req.strike_preference.upper() if req.strike_preference else "ATM"
     if strike_pref not in ("ITM", "ATM", "OTM"):
         raise HTTPException(status_code=400, detail="strike_preference must be ITM, ATM, or OTM")
-    return db.save_scanner_signal_settings(user_id, req.enabled, strike_pref)
+    if not (0 <= req.paper_trade_min_score <= 100):
+        raise HTTPException(status_code=400, detail="paper_trade_min_score must be between 0 and 100")
+    return db.save_scanner_signal_settings(
+        user_id, req.enabled, strike_pref, req.paper_trade_enabled, req.paper_trade_min_score
+    )
 
 
 class KiteCredentialsRequest(BaseModel):
