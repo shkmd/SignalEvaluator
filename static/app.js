@@ -98,6 +98,7 @@ const tabs = {
   positions: { btn: $("tab-positions"), view: $("view-positions"), title: "Positions" },
   orderbook: { btn: $("tab-orderbook"), view: $("view-orderbook"), title: "Order Book" },
   broker: { btn: $("tab-broker"), view: $("view-broker"), title: "Broker Setup" },
+  trademind: { btn: $("tab-trademind"), view: $("view-trademind"), title: "TradeMind" },
   profile: { btn: $("tab-profile"), view: $("view-profile"), title: "Profile" },
 };
 function showTab(name) {
@@ -112,6 +113,7 @@ function showTab(name) {
   if (name === "positions") loadPositions();
   if (name === "orderbook") loadOrderBook();
   if (name === "broker") loadBrokerTab();
+  if (name === "trademind") loadTradeMindTab();
   if (name === "profile") loadProfileTab();
   if (name === "scanner") loadScannerTab();
   if (name === "strategy") loadStrategyTab();

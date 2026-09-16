@@ -102,6 +102,10 @@
           <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M2 9l10-6 10 6"/><path d="M3 21h18"/><path d="M5 21V9M10 21V9M14 21V9M19 21V9"/></svg></span>
           Broker Setup
         </button>
+        <button id="tab-trademind" class="nav-item">
+          <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 9h16"/><path d="M9 9v11"/></svg></span>
+          TradeMind
+        </button>
         <button id="tab-profile" class="nav-item">
           <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg></span>
           Profile
@@ -944,6 +948,166 @@ Target 16/18/20/24/30+"></textarea>
       </div>
     </section>
 
+    <!-- TRADEMIND TAB -->
+    <section id="view-trademind" class="hidden">
+      <div class="scanner-filter-tabs" style="margin-bottom:14px" id="tm-subnav">
+        <button class="filter-tab active" data-tm-view="dashboard">Dashboard</button>
+        <button class="filter-tab" data-tm-view="accounts">Broker Accounts</button>
+        <button class="filter-tab" data-tm-view="import">Import</button>
+        <button class="filter-tab" data-tm-view="trades">Trades</button>
+        <button class="filter-tab" data-tm-view="rules">Rules</button>
+      </div>
+
+      <div id="tm-view-dashboard" class="tm-subview">
+        <div class="panel">
+          <h2>TradeMind Dashboard</h2>
+          <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+            Consolidated from every imported broker account's closed trades. Not connected to
+            this app's signal evaluation or paper-trading -- this is your real broker history,
+            imported from a Tradebook export.
+          </div>
+          <div class="summary-grid" id="tm-dashboard-grid"></div>
+        </div>
+      </div>
+
+      <div id="tm-view-accounts" class="tm-subview hidden">
+        <div class="panel">
+          <h2>Add Broker Account</h2>
+          <div class="grid" style="grid-template-columns: repeat(3, 1fr)">
+            <label>Broker
+              <select id="tm-acc-broker">
+                <option value="zerodha">Zerodha</option>
+                <option value="dhan">Dhan</option>
+                <option value="upstox">Upstox</option>
+                <option value="angelone">Angel One</option>
+                <option value="fyers">Fyers</option>
+                <option value="groww">Groww</option>
+                <option value="other">Other (generic CSV)</option>
+              </select>
+            </label>
+            <label>Nickname
+              <input id="tm-acc-nickname" placeholder="e.g. Main Zerodha" />
+            </label>
+            <label>Masked client ID (optional)
+              <input id="tm-acc-client-id" placeholder="e.g. ZM1234" />
+            </label>
+            <label>Purpose
+              <select id="tm-acc-purpose">
+                <option value="trading">Trading</option>
+                <option value="investing">Investing</option>
+                <option value="both">Both</option>
+              </select>
+            </label>
+            <label>Starting capital
+              <input id="tm-acc-capital" type="number" min="0" step="1" placeholder="e.g. 100000" />
+            </label>
+            <label>Classification
+              <select id="tm-acc-classification">
+                <option value="manual">Manual</option>
+                <option value="algo">Algo</option>
+              </select>
+            </label>
+          </div>
+          <div class="row">
+            <button class="primary" id="btn-tm-add-account">Add account</button>
+            <span id="tm-account-status" style="color:var(--muted);font-size:12px"></span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Your Broker Accounts</h2>
+          <table id="tm-accounts-table">
+            <thead>
+              <tr><th>Nickname</th><th>Broker</th><th>Client ID</th><th>Purpose</th><th>Starting Capital</th><th>Last Synced</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="tm-view-import" class="tm-subview hidden">
+        <div class="panel">
+          <h2>Import Zerodha Tradebook</h2>
+          <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+            Download your Tradebook as CSV from Kite Console (Reports &rarr; Tradebook) for the
+            date range you want, then upload it here. Executions are grouped into round-trip
+            trades automatically (FIFO matching), duplicates are skipped, and the same file can
+            be safely re-uploaded without creating duplicate trades.
+          </div>
+          <div class="grid" style="grid-template-columns: 1fr 1fr">
+            <label>Broker account
+              <select id="tm-import-account"><option value="">-- add a broker account first --</option></select>
+            </label>
+            <label>Tradebook CSV
+              <input id="tm-import-file" type="file" accept=".csv" />
+            </label>
+          </div>
+          <div class="row">
+            <button class="primary" id="btn-tm-import">Upload and import</button>
+            <span id="tm-import-status" style="color:var(--muted);font-size:12px"></span>
+          </div>
+          <div id="tm-import-result" class="hidden" style="margin-top:12px"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Import History</h2>
+          <table id="tm-imports-table">
+            <thead>
+              <tr><th>File</th><th>Status</th><th>Processed</th><th>Rejected</th><th>Duplicates</th><th>Trades</th><th>When</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="tm-view-trades" class="tm-subview hidden">
+        <div class="panel">
+          <h2>Closed Trades</h2>
+          <table id="tm-trades-table">
+            <thead>
+              <tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Gross P&amp;L</th><th>Charges</th><th>Net P&amp;L</th><th>Process Score</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="tm-view-rules" class="tm-subview hidden">
+        <div class="panel">
+          <h2>Trading Rules</h2>
+          <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+            Every closed trade (and every trading day) is checked against your active rules.
+            Trade-level rules (stop-loss, risk-reward) apply once you've filled in a trade's
+            plan from its detail view; day-level rules (daily loss, trade count) apply
+            automatically on import.
+          </div>
+          <div class="grid" style="grid-template-columns: 1fr 1fr 1fr">
+            <label>Rule type
+              <select id="tm-rule-type">
+                <option value="mandatory_stop_loss">Mandatory stop-loss</option>
+                <option value="min_risk_reward">Minimum risk-reward ratio</option>
+                <option value="max_daily_loss">Maximum daily loss (₹)</option>
+                <option value="max_trades_per_day">Maximum trades per day</option>
+              </select>
+            </label>
+            <label>Threshold
+              <input id="tm-rule-threshold" type="number" step="0.1" placeholder="e.g. 2 for 1:2 R:R" />
+            </label>
+            <label>&nbsp;
+              <button class="primary" id="btn-tm-add-rule" style="width:100%">Add rule</button>
+            </label>
+          </div>
+          <table id="tm-rules-table" style="margin-top:14px">
+            <thead>
+              <tr><th>Rule</th><th>Threshold</th><th>Enabled</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="summary-grid" id="tm-compliance-grid" style="margin-top:14px"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- PROFILE TAB -->
     <section id="view-profile" class="hidden">
       <div class="panel">
@@ -996,6 +1160,15 @@ Target 16/18/20/24/30+"></textarea>
     <div id="detail-modal-body"></div>
   </div>
 
+  <div class="modal-backdrop hidden" id="tm-trade-modal-backdrop"></div>
+  <div class="modal hidden" id="tm-trade-modal" style="width:min(760px, 95vw)">
+    <div class="modal-header">
+      <h2 id="tm-trade-modal-title" style="margin:0">Trade detail</h2>
+      <button class="icon-btn" id="btn-tm-close-trade">✕</button>
+    </div>
+    <div id="tm-trade-modal-body"></div>
+  </div>
+
   <div class="modal-backdrop hidden" id="scan-modal-backdrop"></div>
   <div class="modal hidden" id="scan-modal" style="width:min(920px, 95vw)">
     <div class="modal-header">
@@ -1017,5 +1190,6 @@ Target 16/18/20/24/30+"></textarea>
   </div>
 
   <script src="/static/app.js"></script>
+  <script src="/static/trademind.js"></script>
 </body>
 </html>

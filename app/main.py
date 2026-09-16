@@ -13,6 +13,8 @@ from app import db, parser as signal_parser, technicals, options as options_mod,
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
 from app import fo_universe, scanner, telegram_broadcast, alerts, strategies as strategies_mod, backtest as backtest_mod
 from app.brokers import kite as kite_broker, upstox as upstox_broker, dhan as dhan_broker
+from app.trademind.schema import init_tm_schema
+from app.trademind.routes import router as trademind_router
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from app.telegram_client import reset_client
 
@@ -41,6 +43,8 @@ async def redirect_to_canonical_host(request: Request, call_next):
     return await call_next(request)
 
 
+app.include_router(trademind_router)
+
 _monitor_task = None
 
 
@@ -57,6 +61,7 @@ async def _position_monitor_loop():
 async def _startup():
     global _monitor_task
     db.init_db()
+    init_tm_schema()
     try:
         await telegram_ingest.start_all_known_listeners()
     except Exception as e:
