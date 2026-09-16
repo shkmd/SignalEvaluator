@@ -9,7 +9,7 @@ than silently doing nothing -- see place_live_order() below.
 """
 import yfinance as yf
 
-from app import alerts, db, options as options_mod, technicals
+from app import alerts, db, graduation, options as options_mod, technicals
 
 
 def get_live_price(resolved_symbol: str, instrument: str, strike: float) -> dict:
@@ -110,6 +110,20 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
         },
     )
     return {"placed": True, "order_id": order_id, "mode": "paper", "entry_price": entry_price, "quantity": quantity}
+
+
+def place_order_for_channel(
+    user_id: int, signal_id: int, signal: dict, evaluation: dict, channel: str, base_quantity: float
+) -> dict:
+    """The single entry point dedicated per-source auto-trade paths (F&O Scanner, Telegram
+    channels) call instead of place_paper_order() directly -- routes to a REAL place_live_order()
+    if this channel has been auto-graduated to live (app/graduation.py), else stays on
+    place_paper_order(), so graduation applies uniformly regardless of which source fired."""
+    if graduation.is_graduated(user_id, channel):
+        settings = dict(db.get_auto_trade_settings(user_id))
+        settings["quantity"] = base_quantity
+        return place_live_order(user_id, signal_id, signal, evaluation, settings)
+    return place_paper_order(user_id, signal_id, signal, evaluation, {"quantity": base_quantity})
 
 
 def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dict, settings: dict) -> dict:
@@ -309,6 +323,12 @@ def monitor_open_positions() -> list:
             # call, not an automatic outcome.
             if order.get("signal_id"):
                 db.update_outcome(order["user_id"], order["signal_id"], hit)
+                # A closed paper trade is exactly what changes a channel's reliability numbers,
+                # so this is the right moment to re-check whether it now qualifies for (or has
+                # fallen out of) auto-graduation to live -- see app/graduation.py.
+                signal = db.get_signal(order["user_id"], order["signal_id"])
+                if signal:
+                    graduation.check_and_graduate(order["user_id"], signal["channel"])
             closed.append({"order_id": order["id"], "reason": hit, "exit_price": price, "pnl": pnl})
         elif not order.get("sl_alert_sent"):
             if alerts.maybe_alert_sl_proximity(order["user_id"], order, price):

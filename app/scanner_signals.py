@@ -170,7 +170,9 @@ def _maybe_paper_trade(user_id: int, signal_id: int, signal: dict, evaluation: d
     just to see how reliable the scanner actually is. Positions close automatically on SL/
     target hit via trading.monitor_open_positions(), which also syncs the outcome back onto
     this signal -- so Channel Stats' hit-rate for "F&O Scanner" becomes a real, hands-off
-    number instead of something the user has to mark by hand."""
+    number instead of something the user has to mark by hand. If the user has turned on
+    auto-graduate (Broker Setup) and "F&O Scanner" proves itself, trading.place_order_for_channel()
+    below starts placing REAL orders automatically -- see app/graduation.py."""
     settings = db.get_scanner_signal_settings(user_id)
     if not settings.get("paper_trade_enabled"):
         return
@@ -181,6 +183,6 @@ def _maybe_paper_trade(user_id: int, signal_id: int, signal: dict, evaluation: d
     if not signal.get("sl"):
         return
     try:
-        trading.place_paper_order(user_id, signal_id, signal, evaluation, {"quantity": signal.get("lot_size") or 1})
+        trading.place_order_for_channel(user_id, signal_id, signal, evaluation, "F&O Scanner", signal.get("lot_size") or 1)
     except Exception as e:
         print(f"[scanner] Paper trade failed for signal {signal_id}: {e}")

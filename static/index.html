@@ -797,11 +797,45 @@ Target 16/18/20/24/30+"></textarea>
           judge by. Applies to every paper and live trade this Auto-Trade toggle places, across
           every source. See Channel Stats for each channel's current win rate.
         </div>
+
+        <div class="row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="at-auto-graduate" style="width:auto" />
+            Auto-graduate channels to live trading
+          </label>
+        </div>
+        <div class="grid" style="grid-template-columns: repeat(2, 1fr);margin-top:8px">
+          <label>Min closed paper trades
+            <input id="at-graduate-min-trades" type="number" min="1" step="1" />
+          </label>
+          <label>Min win rate to graduate %
+            <input id="at-graduate-min-win-rate" type="number" min="1" max="100" step="1" />
+          </label>
+        </div>
+        <div class="warnings" style="margin-top:8px">
+          <div>&#9888; When on, any F&amp;O Scanner or Telegram-channel source that crosses the bar
+          above is switched to placing REAL orders on your connected broker automatically -- no
+          click from you per channel. You'll get a Telegram alert the moment it happens (and again
+          if it's later auto-demoted back to paper after its win rate drops). Requires a broker
+          connected below. Off by default; turn on only once you trust the numbers on Channel Stats.</div>
+        </div>
+
         <div class="row">
           <button class="primary" id="btn-save-at-settings">Save settings</button>
           <span id="at-settings-status" style="color:var(--muted);font-size:12px"></span>
         </div>
         <div class="warnings" id="at-live-warning"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Channel Graduation Status</h2>
+        <table id="graduation-table">
+          <thead>
+            <tr><th>Channel</th><th>Status</th><th>Win rate at change</th><th>Trades at change</th><th>Changed</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div id="graduation-empty" style="color:var(--muted);font-size:12px;margin-top:8px">No channel has graduated or been demoted yet.</div>
       </div>
 
       <div class="panel">

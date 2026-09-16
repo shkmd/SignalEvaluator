@@ -165,17 +165,19 @@ def _evaluate_and_store(user_id: int, parsed: dict, chat_id: int, message_id: in
         trade_result = trading.auto_trade_check(user_id, signal_id, signal, evaluation)
         if trade_result and trade_result.get("placed"):
             print(f"[trading] user {user_id}: paper order #{trade_result['order_id']} placed for signal #{signal_id}")
-        _maybe_paper_trade(user_id, signal_id, signal, evaluation)
+        _maybe_paper_trade(user_id, signal_id, signal, evaluation, channel_title)
         telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
         alerts.maybe_alert_signal(user_id, signal, evaluation, signal_id)
 
 
-def _maybe_paper_trade(user_id: int, signal_id: int, signal: dict, evaluation: dict) -> None:
+def _maybe_paper_trade(user_id: int, signal_id: int, signal: dict, evaluation: dict, channel: str) -> None:
     """Dedicated auto-paper-trade for every signal auto-evaluated from this user's monitored
     Telegram channels -- separate from both the general Broker-Setup auto-trade (auto_trade_check,
-    above) and the F&O-Scanner-specific one (scanner_signals._maybe_paper_trade). Always paper,
-    never live, and scoped to this source only, so Channel Stats' hit-rate becomes a real,
-    hands-off reliability measurement per channel without the user manually paper-trading each one."""
+    above) and the F&O-Scanner-specific one (scanner_signals._maybe_paper_trade). Starts on paper,
+    scoped to this channel only, so Channel Stats' hit-rate becomes a real, hands-off reliability
+    measurement per channel -- and, if the user has turned on auto-graduate (Broker Setup), a
+    channel that proves itself here can start placing REAL orders automatically; see
+    trading.place_order_for_channel() and app/graduation.py."""
     settings = db.get_telegram_paper_trade_settings(user_id)
     if not settings.get("enabled"):
         return
@@ -186,6 +188,6 @@ def _maybe_paper_trade(user_id: int, signal_id: int, signal: dict, evaluation: d
     if not signal.get("sl"):
         return
     try:
-        trading.place_paper_order(user_id, signal_id, signal, evaluation, {"quantity": 1})
+        trading.place_order_for_channel(user_id, signal_id, signal, evaluation, channel, 1)
     except Exception as e:
         print(f"[telegram] Paper trade failed for signal {signal_id}: {e}")

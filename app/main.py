@@ -416,6 +416,9 @@ class AutoTradeSettingsRequest(BaseModel):
     max_open_positions: Optional[int] = None
     max_daily_loss: Optional[float] = None
     position_sizing_enabled: Optional[bool] = None
+    auto_graduate_enabled: Optional[bool] = None
+    auto_graduate_min_trades: Optional[int] = None
+    auto_graduate_min_win_rate: Optional[float] = None
 
 
 @app.get("/api/trading/settings")
@@ -428,7 +431,16 @@ def save_trading_settings(req: AutoTradeSettingsRequest, user_id: int = Depends(
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if "mode" in updates and updates["mode"] not in ("paper", "live"):
         raise HTTPException(status_code=400, detail="mode must be 'paper' or 'live'")
+    if "auto_graduate_min_win_rate" in updates and not (0 < updates["auto_graduate_min_win_rate"] <= 100):
+        raise HTTPException(status_code=400, detail="auto_graduate_min_win_rate must be between 0 and 100")
+    if "auto_graduate_min_trades" in updates and updates["auto_graduate_min_trades"] < 1:
+        raise HTTPException(status_code=400, detail="auto_graduate_min_trades must be at least 1")
     return db.save_auto_trade_settings(user_id, updates)
+
+
+@app.get("/api/graduation/status")
+def get_graduation_status(user_id: int = Depends(current_user_id)):
+    return db.list_channel_graduations(user_id)
 
 
 @app.get("/api/trading/positions")

@@ -73,3 +73,23 @@ def maybe_alert_sl_proximity(user_id: int, order: dict, current_price: float) ->
     )
     _send(user_id, text, f"SL-proximity alert for order #{order.get('id')}")
     return True
+
+
+def alert_graduation(user_id: int, channel: str, win_rate: float, trades: int) -> None:
+    text = (
+        f"\U0001F680 Auto-graduated to LIVE\n\n"
+        f"'{channel}' just crossed your reliability bar ({win_rate}% win rate over {trades} "
+        f"closed paper trades) and has been automatically switched to real live orders.\n\n"
+        f"Future signals from this channel will place REAL orders on your connected broker."
+    )
+    _send(user_id, text, f"graduation alert for '{channel}'")
+
+
+def alert_demotion(user_id: int, channel: str, win_rate: float, trades: int) -> None:
+    text = (
+        f"\U0001F6D1 Auto-demoted back to paper\n\n"
+        f"'{channel}' dropped to a {win_rate}% win rate over {trades} closed paper trades and "
+        f"has been automatically switched back to paper trading. No more real orders from this "
+        f"channel until it re-qualifies."
+    )
+    _send(user_id, text, f"demotion alert for '{channel}'")

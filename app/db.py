@@ -113,6 +113,21 @@ CREATE TABLE IF NOT EXISTS auto_trade_settings (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+-- Tracks, per (user, channel), whether that channel's dedicated auto-paper-trade has been
+-- automatically graduated to real live orders once it proved reliable enough -- see
+-- app/graduation.py. status flips back to 'paper' (a demotion, not a delete) if the channel's
+-- win rate later drops, so the row is a full history, not just a one-way switch.
+CREATE TABLE IF NOT EXISTS channel_graduation (
+    user_id INTEGER NOT NULL,
+    channel TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'paper',
+    win_rate_at_change REAL,
+    trades_at_change INTEGER,
+    changed_at TEXT,
+    PRIMARY KEY (user_id, channel),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS broker_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -346,6 +361,11 @@ def init_db():
         ats_cols = {c["name"] for c in conn.execute("PRAGMA table_info(auto_trade_settings)").fetchall()}
         if "position_sizing_enabled" not in ats_cols:
             conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN position_sizing_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+        if "auto_graduate_enabled" not in ats_cols:
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN auto_graduate_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN auto_graduate_min_trades INTEGER NOT NULL DEFAULT 15")
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN auto_graduate_min_win_rate REAL NOT NULL DEFAULT 75")
             conn.commit()
 
         orders_cols = {c["name"] for c in conn.execute("PRAGMA table_info(orders)").fetchall()}
@@ -825,6 +845,9 @@ DEFAULT_SETTINGS = {
     "max_open_positions": 5,
     "max_daily_loss": None,
     "position_sizing_enabled": False,
+    "auto_graduate_enabled": False,
+    "auto_graduate_min_trades": 15,
+    "auto_graduate_min_win_rate": 75,
 }
 
 
@@ -856,7 +879,8 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
             """
             UPDATE auto_trade_settings
             SET enabled = ?, mode = ?, min_score = ?, quantity = ?, max_open_positions = ?, max_daily_loss = ?,
-                position_sizing_enabled = ?
+                position_sizing_enabled = ?, auto_graduate_enabled = ?, auto_graduate_min_trades = ?,
+                auto_graduate_min_win_rate = ?
             WHERE user_id = ?
             """,
             (
@@ -867,6 +891,9 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
                 current["max_open_positions"],
                 current["max_daily_loss"],
                 1 if current["position_sizing_enabled"] else 0,
+                1 if current["auto_graduate_enabled"] else 0,
+                current["auto_graduate_min_trades"],
+                current["auto_graduate_min_win_rate"],
                 user_id,
             ),
         )
@@ -897,6 +924,51 @@ def channel_reliability(user_id: int, channel: str) -> dict:
         wins = row["wins"] or 0
         win_rate = round(100 * wins / trades_closed, 1) if trades_closed else None
         return {"trades_closed": trades_closed, "win_rate": win_rate}
+    finally:
+        conn.close()
+
+
+# ---- Channel graduation (paper -> live, per user+channel) ----
+
+def get_channel_graduation(user_id: int, channel: str) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM channel_graduation WHERE user_id = ? AND channel = ?", (user_id, channel)
+        ).fetchone()
+        return dict(row) if row else {"user_id": user_id, "channel": channel, "status": "paper"}
+    finally:
+        conn.close()
+
+
+def set_channel_graduation(user_id: int, channel: str, status: str, win_rate: float, trades: int) -> dict:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO channel_graduation (user_id, channel, status, win_rate_at_change, trades_at_change, changed_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, channel) DO UPDATE SET
+                status = excluded.status,
+                win_rate_at_change = excluded.win_rate_at_change,
+                trades_at_change = excluded.trades_at_change,
+                changed_at = excluded.changed_at
+            """,
+            (user_id, channel, status, win_rate, trades, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return get_channel_graduation(user_id, channel)
+    finally:
+        conn.close()
+
+
+def list_channel_graduations(user_id: int) -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM channel_graduation WHERE user_id = ? ORDER BY changed_at DESC", (user_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

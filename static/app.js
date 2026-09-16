@@ -1451,7 +1451,14 @@ async function loadOrderBook() {
 const BROKERS = [{ id: "angelone", name: "Angel One (SmartAPI)" }];
 
 async function loadBrokerTab() {
-  await Promise.all([loadAutoTradeSettings(), loadBrokerList(), loadKiteStatus(), loadUpstoxStatus(), loadDhanStatus()]);
+  await Promise.all([
+    loadAutoTradeSettings(),
+    loadBrokerList(),
+    loadKiteStatus(),
+    loadUpstoxStatus(),
+    loadDhanStatus(),
+    loadGraduationStatus(),
+  ]);
 }
 
 async function loadKiteStatus() {
@@ -1639,6 +1646,9 @@ async function loadAutoTradeSettings() {
   $("at-max-positions").value = s.max_open_positions;
   $("at-max-loss").value = s.max_daily_loss ?? "";
   $("at-position-sizing").checked = !!s.position_sizing_enabled;
+  $("at-auto-graduate").checked = !!s.auto_graduate_enabled;
+  $("at-graduate-min-trades").value = s.auto_graduate_min_trades ?? 15;
+  $("at-graduate-min-win-rate").value = s.auto_graduate_min_win_rate ?? 75;
   updateLiveWarning();
 }
 
@@ -1662,6 +1672,9 @@ $("btn-save-at-settings").onclick = async () => {
     max_open_positions: parseInt($("at-max-positions").value, 10),
     max_daily_loss: $("at-max-loss").value ? parseFloat($("at-max-loss").value) : null,
     position_sizing_enabled: $("at-position-sizing").checked,
+    auto_graduate_enabled: $("at-auto-graduate").checked,
+    auto_graduate_min_trades: parseInt($("at-graduate-min-trades").value, 10),
+    auto_graduate_min_win_rate: parseFloat($("at-graduate-min-win-rate").value),
   };
   statusEl.textContent = "Saving…";
   try {
@@ -1676,6 +1689,26 @@ $("btn-save-at-settings").onclick = async () => {
     statusEl.textContent = "Error: " + e.message;
   }
 };
+
+async function loadGraduationStatus() {
+  const res = await fetch("/api/graduation/status");
+  const rows = await res.json();
+  const tbody = document.querySelector("#graduation-table tbody");
+  tbody.innerHTML = "";
+  $("graduation-empty").classList.toggle("hidden", rows.length > 0);
+  rows.forEach((r) => {
+    const tr = document.createElement("tr");
+    const statusColor = r.status === "live" ? "var(--red)" : "var(--muted)";
+    tr.innerHTML = `
+      <td>${r.channel}</td>
+      <td style="color:${statusColor};font-weight:600">${r.status === "live" ? "LIVE" : "Paper"}</td>
+      <td>${r.win_rate_at_change != null ? r.win_rate_at_change + "%" : "-"}</td>
+      <td>${r.trades_at_change ?? "-"}</td>
+      <td>${r.changed_at ? new Date(r.changed_at).toLocaleString() : "-"}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
 
 async function loadBrokerList() {
   const res = await fetch("/api/broker/accounts");
