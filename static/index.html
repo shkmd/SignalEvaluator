@@ -643,6 +643,26 @@ Target 16/18/20/24/30+"></textarea>
           <span id="broadcast-settings-status" style="color:var(--muted);font-size:12px"></span>
         </div>
       </div>
+
+      <div class="panel">
+        <h2>Auto Paper-Trade Channel Signals</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+          Automatically paper-trades every signal auto-evaluated from your monitored Telegram
+          channels once it scores at or above the threshold below, using a live current price
+          (not the price parsed from the message). This is separate from the general Broker
+          Setup auto-trade and from the F&amp;O Scanner's own auto paper-trade -- it exists purely
+          to measure each channel's real reliability, hands-off, via that channel's hit rate on
+          the Channel Stats page. Always paper -- no real money is ever used.
+        </div>
+        <div class="row">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="chk-telegram-paper-trade" style="width:auto" />
+            Paper-trade every channel signal scoring &ge;
+          </label>
+          <input id="inp-telegram-paper-trade-min-score" type="number" min="0" max="100" step="1" value="70" style="width:64px" />
+          <span id="telegram-paper-trade-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
+      </div>
     </section>
 
     <!-- POSITIONS TAB -->

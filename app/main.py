@@ -838,4 +838,21 @@ async def send_broadcast_test(user_id: int = Depends(current_user_id)):
     return result
 
 
+class TelegramPaperTradeSettingsRequest(BaseModel):
+    enabled: bool
+    min_score: float = 70
+
+
+@app.get("/api/telegram/paper-trade-settings")
+def get_telegram_paper_trade_settings(user_id: int = Depends(current_user_id)):
+    return db.get_telegram_paper_trade_settings(user_id)
+
+
+@app.post("/api/telegram/paper-trade-settings")
+def save_telegram_paper_trade_settings(req: TelegramPaperTradeSettingsRequest, user_id: int = Depends(current_user_id)):
+    if not (0 <= req.min_score <= 100):
+        raise HTTPException(status_code=400, detail="min_score must be between 0 and 100")
+    return db.save_telegram_paper_trade_settings(user_id, req.enabled, req.min_score)
+
+
 app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")

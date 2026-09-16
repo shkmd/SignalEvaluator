@@ -165,4 +165,26 @@ def _evaluate_and_store(user_id: int, parsed: dict, chat_id: int, message_id: in
         trade_result = trading.auto_trade_check(user_id, signal_id, signal, evaluation)
         if trade_result and trade_result.get("placed"):
             print(f"[trading] user {user_id}: paper order #{trade_result['order_id']} placed for signal #{signal_id}")
+        _maybe_paper_trade(user_id, signal_id, signal, evaluation)
         telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
+
+
+def _maybe_paper_trade(user_id: int, signal_id: int, signal: dict, evaluation: dict) -> None:
+    """Dedicated auto-paper-trade for every signal auto-evaluated from this user's monitored
+    Telegram channels -- separate from both the general Broker-Setup auto-trade (auto_trade_check,
+    above) and the F&O-Scanner-specific one (scanner_signals._maybe_paper_trade). Always paper,
+    never live, and scoped to this source only, so Channel Stats' hit-rate becomes a real,
+    hands-off reliability measurement per channel without the user manually paper-trading each one."""
+    settings = db.get_telegram_paper_trade_settings(user_id)
+    if not settings.get("enabled"):
+        return
+    if (evaluation.get("score") or 0) < settings.get("min_score", 70):
+        return
+    if not signal.get("entry_low") and not signal.get("entry_high"):
+        return
+    if not signal.get("sl"):
+        return
+    try:
+        trading.place_paper_order(user_id, signal_id, signal, evaluation, {"quantity": 1})
+    except Exception as e:
+        print(f"[telegram] Paper trade failed for signal {signal_id}: {e}")

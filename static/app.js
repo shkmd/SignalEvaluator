@@ -874,6 +874,7 @@ async function loadTelegramTab() {
   await refreshTelegramStatus();
   await refreshTelegramChannels();
   await loadBroadcastSettings();
+  await loadTelegramPaperTradeSettings();
 }
 
 async function loadBroadcastSettings() {
@@ -935,6 +936,37 @@ $("btn-send-broadcast-test").onclick = async () => {
     btn.disabled = false;
   }
 };
+
+async function loadTelegramPaperTradeSettings() {
+  const res = await fetch("/api/telegram/paper-trade-settings");
+  const s = await res.json();
+  $("chk-telegram-paper-trade").checked = !!s.enabled;
+  $("inp-telegram-paper-trade-min-score").value = s.min_score ?? 70;
+}
+
+async function saveTelegramPaperTradeSettings(statusText) {
+  const statusEl = $("telegram-paper-trade-status");
+  statusEl.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/telegram/paper-trade-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: $("chk-telegram-paper-trade").checked,
+        min_score: parseFloat($("inp-telegram-paper-trade-min-score").value) || 0,
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
+    statusEl.textContent = statusText;
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+}
+
+$("chk-telegram-paper-trade").onchange = (e) =>
+  saveTelegramPaperTradeSettings(e.target.checked ? "Paper-trading enabled." : "Paper-trading disabled.");
+$("inp-telegram-paper-trade-min-score").onchange = () =>
+  saveTelegramPaperTradeSettings(`Min score: ${$("inp-telegram-paper-trade-min-score").value}.`);
 
 async function refreshTelegramStatus() {
   const badge = $("telegram-status-badge");

@@ -258,6 +258,18 @@ CREATE TABLE IF NOT EXISTS telegram_broadcast_settings (
     min_score REAL NOT NULL DEFAULT 60,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+-- Dedicated paper-trading for signals auto-evaluated from monitored Telegram channels (see
+-- scanner_signal_settings.paper_trade_* for the same concept applied to F&O Scanner signals).
+-- Always paper, never live, and scoped to source='telegram' only -- separate from both the
+-- general Broker Setup auto-trade toggle and the scanner one, so each source's reliability
+-- (via Channel Stats' hit-rate, grouped by channel) can be measured independently.
+CREATE TABLE IF NOT EXISTS telegram_paper_trade_settings (
+    user_id INTEGER PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    min_score REAL NOT NULL DEFAULT 70,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 """
 
 
@@ -1499,5 +1511,37 @@ def save_telegram_broadcast_settings(user_id: int, enabled: bool, target_chat_id
         )
         conn.commit()
         return get_telegram_broadcast_settings(user_id)
+    finally:
+        conn.close()
+
+
+# ---- Telegram auto-paper-trade settings (per user) ----
+
+def get_telegram_paper_trade_settings(user_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM telegram_paper_trade_settings WHERE user_id = ?", (user_id,)).fetchone()
+        if not row:
+            return {"user_id": user_id, "enabled": False, "min_score": 70}
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def save_telegram_paper_trade_settings(user_id: int, enabled: bool, min_score: float) -> dict:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO telegram_paper_trade_settings (user_id, enabled, min_score)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                min_score = excluded.min_score
+            """,
+            (user_id, 1 if enabled else 0, min_score),
+        )
+        conn.commit()
+        return get_telegram_paper_trade_settings(user_id)
     finally:
         conn.close()
