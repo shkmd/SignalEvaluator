@@ -1,6 +1,6 @@
 """Scan orchestrator: runs the qualification engine across the whole F&O universe and
-persists results. Manual trigger only in Phase 1 -- scheduled 15-minute runs are Phase 2.
-"""
+persists results. Triggered either manually (POST /api/scanner/run) or automatically every 15
+minutes during NSE market hours by the background loop in main.py (see _auto_scan_loop)."""
 import io
 import csv
 import traceback

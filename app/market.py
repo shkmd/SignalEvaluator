@@ -1,4 +1,7 @@
 """Live index quotes for the ticker bar (NIFTY 50, BANK NIFTY, SENSEX)."""
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
 import yfinance as yf
 
 INDEX_TICKERS = {
@@ -6,6 +9,22 @@ INDEX_TICKERS = {
     "BANK NIFTY": "^NSEBANK",
     "SENSEX": "^BSESN",
 }
+
+IST = ZoneInfo("Asia/Kolkata")
+NSE_OPEN = time(9, 15)
+NSE_CLOSE = time(15, 30)
+
+
+def is_market_hours_now() -> bool:
+    """NSE regular session, Monday-Friday 09:15-15:30 IST. Deliberately doesn't know about
+    exchange holidays (no holiday calendar wired up) -- on a holiday this returns True and a
+    scan runs anyway, just against a closed market; the underlying data lookups degrade
+    gracefully (qualification.evaluate_stock already treats an unavailable quote as
+    "unavailable", not a crash), so the cost is a handful of wasted API calls, not a bug."""
+    now = datetime.now(IST)
+    if now.weekday() >= 5:  # Saturday, Sunday
+        return False
+    return NSE_OPEN <= now.time() <= NSE_CLOSE
 
 
 def fetch_index_quotes() -> list:

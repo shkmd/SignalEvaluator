@@ -46,6 +46,10 @@ async def redirect_to_canonical_host(request: Request, call_next):
 app.include_router(trademind_router)
 
 _monitor_task = None
+_auto_scan_task = None
+
+AUTO_SCAN_INTERVAL_SECONDS = 15 * 60  # matches the "scheduled 15-minute runs" note in scanner.py
+AUTO_SCAN_IDLE_CHECK_SECONDS = 120  # how often to check "has the market opened yet" while closed
 
 
 async def _position_monitor_loop():
@@ -57,9 +61,41 @@ async def _position_monitor_loop():
         await asyncio.sleep(60)
 
 
+def _run_auto_scan_once():
+    """Runs every known strategy against the shared F&O universe -- scan_runs/results aren't
+    per-user data (see scanner.py), so this isn't scoped to any one user's enabled strategies
+    the way the manual /api/scanner/run trigger is; each user's own Strategy-tab selection is
+    applied downstream, when scanner_signals.generate_signals_for_scan() (called from inside
+    run_scan itself) decides who actually gets a signal out of this scan."""
+    for strategy in strategies_mod.list_strategies():
+        try:
+            result = scanner.run_scan(strategy_id=strategy["id"])
+            print(
+                f"[scanner] Auto-scan ({strategy['id']}): scan_run #{result['scan_run_id']} completed, "
+                f"{result['signals_generated']} signal(s) generated."
+            )
+        except RuntimeError as e:
+            print(f"[scanner] Auto-scan skipped for {strategy['id']}: {e}")
+        except Exception as e:
+            print(f"[scanner] Auto-scan error for {strategy['id']}: {e}")
+
+
+async def _auto_scan_loop():
+    while True:
+        try:
+            if market.is_market_hours_now():
+                await asyncio.to_thread(_run_auto_scan_once)
+                await asyncio.sleep(AUTO_SCAN_INTERVAL_SECONDS)
+            else:
+                await asyncio.sleep(AUTO_SCAN_IDLE_CHECK_SECONDS)
+        except Exception as e:
+            print(f"[scanner] Auto-scan loop error: {e}")
+            await asyncio.sleep(AUTO_SCAN_IDLE_CHECK_SECONDS)
+
+
 @app.on_event("startup")
 async def _startup():
-    global _monitor_task
+    global _monitor_task, _auto_scan_task
     db.init_db()
     init_tm_schema()
     try:
@@ -67,12 +103,15 @@ async def _startup():
     except Exception as e:
         print(f"[telegram] Startup skipped: {e}")
     _monitor_task = asyncio.create_task(_position_monitor_loop())
+    _auto_scan_task = asyncio.create_task(_auto_scan_loop())
 
 
 @app.on_event("shutdown")
 async def _shutdown():
     if _monitor_task:
         _monitor_task.cancel()
+    if _auto_scan_task:
+        _auto_scan_task.cancel()
 
 
 def current_user_id(user: dict = Depends(auth.require_user)) -> int:
