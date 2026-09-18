@@ -1390,11 +1390,32 @@ async function loadPositions() {
   const tbody = document.querySelector("#positions-table tbody");
   tbody.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--muted)">No open positions${_positionsFilter !== "ALL" ? " for this filter" : ""}. Enable auto-trade in Broker Setup, or positions will appear here once a signal clears your score threshold.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" style="color:var(--muted)">No open positions${_positionsFilter !== "ALL" ? " for this filter" : ""}. Enable auto-trade in Broker Setup, or positions will appear here once a signal clears your score threshold.</td></tr>`;
     return;
   }
   rows.forEach((o) => {
     const tr = document.createElement("tr");
+    const ltpCell = o.current_price != null ? o.current_price : `<span title="${o.price_unavailable_reason || ""}" style="color:var(--muted)">n/a</span>`;
+    let pnlCell = `<span style="color:var(--muted)">-</span>`;
+    if (o.unrealized_pnl != null) {
+      const pnlColor = o.unrealized_pnl > 0 ? "var(--green)" : o.unrealized_pnl < 0 ? "var(--red)" : "var(--muted)";
+      pnlCell = `<span style="color:${pnlColor}">${formatPnl(o.unrealized_pnl)}</span>`;
+    }
+
+    // At-a-glance SL/target proximity: hit positions normally auto-close within 60s (see
+    // trading.monitor_open_positions), so seeing "hit" here briefly just means the price
+    // gapped past it since the last poll, not a bug.
+    let slCell = o.sl ?? "-";
+    let targetCell = o.target ?? "-";
+    if (o.current_price != null && o.sl) {
+      const slHit = o.side === "buy" ? o.current_price <= o.sl : o.current_price >= o.sl;
+      if (slHit) slCell = `<span style="color:var(--red)">⚠ ${o.sl} (hit)</span>`;
+    }
+    if (o.current_price != null && o.target) {
+      const targetHit = o.side === "buy" ? o.current_price >= o.target : o.current_price <= o.target;
+      if (targetHit) targetCell = `<span style="color:var(--green)">🎯 ${o.target} (hit)</span>`;
+    }
+
     tr.innerHTML = `
       <td>${o.id}</td>
       <td>${categoryBadge(o.instrument)}</td>
@@ -1403,8 +1424,10 @@ async function loadPositions() {
       <td>${o.side}</td>
       <td>${o.quantity}</td>
       <td>${o.entry_price ?? "-"}</td>
-      <td>${o.sl ?? "-"}</td>
-      <td>${o.target ?? "-"}</td>
+      <td>${ltpCell}</td>
+      <td>${pnlCell}</td>
+      <td>${slCell}</td>
+      <td>${targetCell}</td>
       <td><button class="icon-btn" data-id="${o.id}" title="Close position">✕</button></td>
     `;
     tr.querySelector("button").onclick = async () => {

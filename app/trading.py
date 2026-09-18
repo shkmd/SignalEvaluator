@@ -7,9 +7,13 @@ Live mode requires a connected broker account AND a broker-specific order-placem
 (see app/brokers/). Until one is implemented for your broker, live orders are refused rather
 than silently doing nothing -- see place_live_order() below.
 """
+from concurrent.futures import ThreadPoolExecutor
+
 import yfinance as yf
 
 from app import alerts, db, graduation, options as options_mod, technicals
+
+MAX_WORKERS_LIVE_PRICE = 8
 
 
 def get_live_price(resolved_symbol: str, instrument: str, strike: float) -> dict:
@@ -26,6 +30,31 @@ def get_live_price(resolved_symbol: str, instrument: str, strike: float) -> dict
         return {"available": True, "price": float(info["last_price"]), "source": "yfinance"}
     except Exception as e:
         return {"available": False, "reason": f"Price fetch failed: {e}"}
+
+
+def enrich_open_positions(orders: list) -> list:
+    """Adds the current live price and unrealized P&L to each open order -- without this, the
+    Positions table can only show what a trade was entered at, not what it's worth right now or
+    how close it's sitting to its own SL/target. Fetched concurrently since this runs inline in
+    a GET request and a handful of sequential price lookups would make the page noticeably slow
+    to load."""
+    def _enrich_one(order):
+        o = dict(order)
+        price_info = get_live_price(o["resolved_symbol"], o["instrument"], o["strike"])
+        if price_info["available"]:
+            price = price_info["price"]
+            o["current_price"] = round(price, 2)
+            o["unrealized_pnl"] = _calc_pnl(o, price)
+        else:
+            o["current_price"] = None
+            o["unrealized_pnl"] = None
+            o["price_unavailable_reason"] = price_info.get("reason")
+        return o
+
+    if not orders:
+        return []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS_LIVE_PRICE) as pool:
+        return list(pool.map(_enrich_one, orders))
 
 
 MIN_TRADES_FOR_SIZING = 5

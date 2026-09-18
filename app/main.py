@@ -489,7 +489,8 @@ def get_graduation_status(user_id: int = Depends(current_user_id)):
 
 @app.get("/api/trading/positions")
 def get_positions(mode: Optional[str] = None, user_id: int = Depends(current_user_id)):
-    return db.list_orders(user_id, status="open", mode=mode)
+    orders = db.list_orders(user_id, status="open", mode=mode)
+    return trading.enrich_open_positions(orders)
 
 
 @app.get("/api/trading/orders")
