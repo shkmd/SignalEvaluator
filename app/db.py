@@ -1039,6 +1039,21 @@ def get_order(user_id: int, order_id: int) -> dict:
         conn.close()
 
 
+def order_exists_for_signal(user_id: int, signal_id: int) -> bool:
+    """One signal should never produce more than one order, no matter how many independent
+    auto-trade paths are enabled at once (general Broker-Setup auto-trade, the F&O Scanner's
+    own dedicated paper-trade, a Telegram channel's dedicated paper-trade) -- see
+    trading.place_paper_order()/place_live_order(), which both call this before inserting."""
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM orders WHERE user_id = ? AND signal_id = ? LIMIT 1", (user_id, signal_id)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
 def list_all_open_orders(mode: str = "paper") -> list:
     """Cross-user: used by the background position monitor, which checks every open
     paper position regardless of owner."""

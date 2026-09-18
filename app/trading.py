@@ -111,6 +111,13 @@ def auto_trade_check(user_id: int, signal_id: int, signal: dict, evaluation: dic
 
 
 def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: dict, settings: dict) -> dict:
+    # One signal, at most one order -- without this, a signal that qualifies for more than one
+    # independently-enabled auto-trade path (general Broker-Setup auto-trade, F&O Scanner's own
+    # dedicated paper-trade, a Telegram channel's dedicated paper-trade) gets traded once per
+    # path instead of once, which looks like duplicate positions for the same contract.
+    if signal_id and db.order_exists_for_signal(user_id, signal_id):
+        return {"placed": False, "reason": "An order already exists for this signal."}
+
     resolved_symbol = signal["resolved_symbol"]
     instrument = signal.get("instrument", "EQ")
     strike = signal.get("strike")
@@ -165,6 +172,9 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
     manage -- automatic bracket-style exit via Kite (GTT orders) isn't wired up yet, unlike
     paper mode where monitor_open_positions() auto-closes on SL/target hit.
     """
+    if signal_id and db.order_exists_for_signal(user_id, signal_id):
+        return {"placed": False, "reason": "An order already exists for this signal."}
+
     if signal.get("instrument") in ("CE", "PE"):
         return {
             "placed": False,
