@@ -118,6 +118,26 @@ def size_for_reliability(user_id: int, signal_id: int, base_quantity: float) -> 
     return max(1, round(base_quantity * multiplier))
 
 
+def _order_side(signal: dict, evaluation: dict) -> str:
+    """The actual buy/sell action for this order. Prefers signal["action"] -- set correctly
+    upstream (scanner_signals.py's _build_atm_signal always sets "buy" for a CE or PE, since
+    buying the option matching your directional view is the actual strategy this app trades;
+    _build_equity_signal and the Telegram/manual parser set "buy"/"sell" explicitly too, for a
+    genuine equity long/short or an explicitly-stated "SELL ... PE" call).
+
+    evaluation["direction"] is a DIFFERENT concept -- the market thesis (bullish/bearish) used
+    for scoring/technicals alignment -- and must never be used to infer the order's side: for
+    an option, scoring.py sets direction="bearish" for every single PE by definition of the
+    instrument, which is not the same question as "did we buy or sell that PE." Using it here
+    silently flipped every option order to the wrong side and inverted its P&L sign. Only falls
+    back to direction when a signal genuinely has no action of its own (a manually/Telegram
+    parsed EQUITY signal with no BUY/SELL keyword in the text)."""
+    action = signal.get("action")
+    if action in ("buy", "sell"):
+        return action
+    return "sell" if evaluation["direction"] == "bearish" else "buy"
+
+
 def auto_trade_check(user_id: int, signal_id: int, signal: dict, evaluation: dict) -> dict | None:
     """Called right after every evaluation (manual or Telegram-auto). Places a paper (or,
     once wired, live) order if this user's auto-trade is enabled and the signal clears the bar."""
@@ -151,7 +171,7 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
     resolved_symbol = signal["resolved_symbol"]
     instrument = signal.get("instrument", "EQ")
     strike = signal.get("strike")
-    side = "sell" if evaluation["direction"] == "bearish" else "buy"
+    side = _order_side(signal, evaluation)
 
     price_info = get_live_price(resolved_symbol, instrument, strike, user_id=user_id)
     entry_price = price_info["price"] if price_info["available"] else (signal.get("entry_high") or signal.get("entry_low"))
@@ -231,7 +251,7 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
             }
 
     resolved_symbol = signal["resolved_symbol"]
-    side = "SELL" if evaluation["direction"] == "bearish" else "BUY"
+    side = _order_side(signal, evaluation).upper()
     quantity = int(size_for_reliability(user_id, signal_id, settings["quantity"]))
 
     try:
