@@ -284,6 +284,49 @@ def find_atm_option(user_id: int, name: str, current_price: float, instrument: s
     }
 
 
+def find_option_by_strike(user_id: int, name: str, strike: float, instrument: str) -> dict:
+    """Live LTP for a SPECIFIC strike (an already-open position's strike, not a moneyness pick)
+    at the nearest upcoming expiry -- see kite.find_option_by_strike() for why this exists."""
+    df = _load_instruments()
+    opts = df[
+        (df["segment"] == "NSE_FO") & (df["underlying_symbol"] == name.upper()) & (df["instrument_type"] == instrument.upper())
+    ]
+    if opts.empty:
+        return {"available": False, "reason": f"No {instrument} contracts found for {name} on Upstox's instrument list."}
+
+    today_ms = datetime.now(IST).timestamp() * 1000
+    upcoming = opts[opts["expiry"] >= today_ms]
+    if upcoming.empty:
+        return {"available": False, "reason": f"No upcoming {instrument} expiries found for {name}."}
+
+    nearest_expiry = upcoming["expiry"].min()
+    at_expiry = upcoming[upcoming["expiry"] == nearest_expiry]
+    match = at_expiry[(at_expiry["strike_price"] - strike).abs() < 0.5]
+    if match.empty:
+        return {"available": False, "reason": f"Strike {strike} not found for {name} {instrument} at the nearest expiry."}
+    closest = match.iloc[0]
+
+    instrument_key = closest["instrument_key"]
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/market-quote/quotes", params={"instrument_key": instrument_key}, headers=_headers(user_id), timeout=10
+        )
+        resp.raise_for_status()
+        quote_data = resp.json().get("data", {})
+        quote = next(iter(quote_data.values()), {})
+    except Exception as e:
+        return {"available": False, "reason": f"Quote fetch failed for {closest['trading_symbol']}: {e}"}
+
+    return {
+        "available": True,
+        "source": "upstox",
+        "tradingsymbol": closest["trading_symbol"],
+        "expiry": pd.Timestamp(nearest_expiry, unit="ms").date().isoformat(),
+        "strike": float(closest["strike_price"]),
+        "ltp": quote.get("last_price"),
+    }
+
+
 def place_order(
     user_id: int,
     instrument_key: str,

@@ -16,9 +16,20 @@ from app import alerts, db, graduation, options as options_mod, technicals
 MAX_WORKERS_LIVE_PRICE = 8
 
 
-def get_live_price(resolved_symbol: str, instrument: str, strike: float) -> dict:
-    """Best-effort current price for either an equity or an option leg."""
+def get_live_price(resolved_symbol: str, instrument: str, strike: float, user_id: int = None) -> dict:
+    """Best-effort current price for either an equity or an option leg.
+
+    For an option leg, tries the user's own connected broker FIRST when a user_id is given --
+    NSE's public option-chain endpoint is blocked outright (HTTP 403 on their own homepage, via
+    Akamai bot protection) from most cloud/datacenter IPs, so on a server deployment like this
+    one the NSE path is a fallback of last resort, not the primary source, whenever a broker
+    session is actually available."""
     if instrument in ("CE", "PE") and strike:
+        if user_id is not None:
+            broker_result = _broker_option_ltp(user_id, resolved_symbol, strike, instrument)
+            if broker_result is not None:
+                return broker_result
+
         snap = options_mod.fetch_option_chain_snapshot(resolved_symbol, strike, instrument)
         if snap.get("available") and snap.get("ltp"):
             return {"available": True, "price": float(snap["ltp"]), "source": "nse_option_chain"}
@@ -32,6 +43,25 @@ def get_live_price(resolved_symbol: str, instrument: str, strike: float) -> dict
         return {"available": False, "reason": f"Price fetch failed: {e}"}
 
 
+def _broker_option_ltp(user_id: int, resolved_symbol: str, strike: float, instrument: str) -> dict | None:
+    """Returns None (not a failure dict) when no broker is connected or the broker lookup
+    itself errors, so the caller falls through to the NSE path -- only an explicit, successful
+    broker answer short-circuits it."""
+    try:
+        from app.brokers import get_connected_adapter
+
+        broker = get_connected_adapter(user_id)
+        if not broker or not hasattr(broker, "find_option_by_strike"):
+            return None
+        name = resolved_symbol.split(".")[0]
+        result = broker.find_option_by_strike(user_id, name, strike, instrument)
+        if result.get("available") and result.get("ltp"):
+            return {"available": True, "price": float(result["ltp"]), "source": result.get("source", "broker")}
+        return None
+    except Exception:
+        return None
+
+
 def enrich_open_positions(orders: list) -> list:
     """Adds the current live price and unrealized P&L to each open order -- without this, the
     Positions table can only show what a trade was entered at, not what it's worth right now or
@@ -40,7 +70,7 @@ def enrich_open_positions(orders: list) -> list:
     to load."""
     def _enrich_one(order):
         o = dict(order)
-        price_info = get_live_price(o["resolved_symbol"], o["instrument"], o["strike"])
+        price_info = get_live_price(o["resolved_symbol"], o["instrument"], o["strike"], user_id=o["user_id"])
         if price_info["available"]:
             price = price_info["price"]
             o["current_price"] = round(price, 2)
@@ -123,7 +153,7 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
     strike = signal.get("strike")
     side = "sell" if evaluation["direction"] == "bearish" else "buy"
 
-    price_info = get_live_price(resolved_symbol, instrument, strike)
+    price_info = get_live_price(resolved_symbol, instrument, strike, user_id=user_id)
     entry_price = price_info["price"] if price_info["available"] else (signal.get("entry_high") or signal.get("entry_low"))
     quantity = size_for_reliability(user_id, signal_id, settings["quantity"])
 
@@ -280,7 +310,7 @@ def close_order(user_id: int, order_id: int, reason: str = "manual_close") -> di
     if order["mode"] == "live":
         return _close_live_order(user_id, order, reason)
 
-    price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"])
+    price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"], user_id=user_id)
     exit_price = price_info["price"] if price_info["available"] else order["entry_price"]
     pnl = _calc_pnl(order, exit_price)
     db.close_order(order_id, exit_price, reason, pnl)
@@ -344,7 +374,7 @@ def monitor_open_positions() -> list:
     background task."""
     closed = []
     for order in db.list_all_open_orders(mode="paper"):
-        price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"])
+        price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"], user_id=order["user_id"])
         if not price_info["available"]:
             continue
         price = price_info["price"]
@@ -376,7 +406,7 @@ def monitor_open_positions() -> list:
     for order in db.list_all_open_orders(mode="live"):
         if order.get("sl_alert_sent"):
             continue
-        price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"])
+        price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"], user_id=order["user_id"])
         if not price_info["available"]:
             continue
         if alerts.maybe_alert_sl_proximity(order["user_id"], order, price_info["price"]):

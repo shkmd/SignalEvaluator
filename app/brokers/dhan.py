@@ -278,6 +278,57 @@ def find_atm_option(user_id: int, name: str, current_price: float, instrument: s
     }
 
 
+def find_option_by_strike(user_id: int, name: str, strike: float, instrument: str) -> dict:
+    """Live LTP for a SPECIFIC strike (an already-open position's strike, not a moneyness pick)
+    at the nearest upcoming expiry -- see kite.find_option_by_strike() for why this exists."""
+    df = _load_instruments()
+    opts = df[
+        (df["EXCH_ID"] == "NSE")
+        & (df["INSTRUMENT"] == "OPTSTK")
+        & (df["UNDERLYING_SYMBOL"].astype(str) == name.upper())
+        & (df["OPTION_TYPE"] == instrument.upper())
+    ]
+    if opts.empty:
+        return {"available": False, "reason": f"No {instrument} contracts found for {name} on Dhan's instrument list."}
+
+    opts = opts.copy()
+    opts["expiry_date"] = pd.to_datetime(opts["SM_EXPIRY_DATE"]).dt.date
+    today = datetime.now(timezone.utc).date()
+    upcoming = opts[opts["expiry_date"] >= today]
+    if upcoming.empty:
+        return {"available": False, "reason": f"No upcoming {instrument} expiries found for {name}."}
+
+    nearest_expiry = upcoming["expiry_date"].min()
+    at_expiry = upcoming[upcoming["expiry_date"] == nearest_expiry]
+    match = at_expiry[(at_expiry["STRIKE_PRICE"] - strike).abs() < 0.5]
+    if match.empty:
+        return {"available": False, "reason": f"Strike {strike} not found for {name} {instrument} at the nearest expiry."}
+    closest = match.iloc[0]
+
+    security_id = str(int(closest["SECURITY_ID"]))
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/marketfeed/quote",
+            headers=_headers(user_id, {"Content-Type": "application/json"}),
+            json={"NSE_FNO": [int(security_id)]},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        quote_data = resp.json().get("data", {}).get("NSE_FNO", {})
+        quote = quote_data.get(security_id) or next(iter(quote_data.values()), {})
+    except Exception as e:
+        return {"available": False, "reason": f"Quote fetch failed for {closest.get('SYMBOL_NAME')}: {e}"}
+
+    return {
+        "available": True,
+        "source": "dhan",
+        "tradingsymbol": closest.get("SYMBOL_NAME"),
+        "expiry": nearest_expiry.isoformat(),
+        "strike": float(closest["STRIKE_PRICE"]),
+        "ltp": quote.get("last_price"),
+    }
+
+
 def place_order(
     user_id: int,
     security_id: str,

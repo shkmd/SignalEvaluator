@@ -169,6 +169,49 @@ def find_atm_option(user_id: int, name: str, current_price: float, instrument: s
     }
 
 
+def find_option_by_strike(user_id: int, name: str, strike: float, instrument: str) -> dict:
+    """Live LTP for a SPECIFIC strike (an already-open position's strike, not a moneyness pick)
+    at the nearest upcoming expiry -- the broker-connected counterpart to
+    trading.get_live_price()'s NSE-scraping fallback, which NSE's Akamai bot protection blocks
+    outright from most cloud/datacenter IPs (see app/trading.py). A position doesn't record
+    which exact expiry it was opened for, so "nearest upcoming" is a best-effort match, same
+    limitation the NSE path already had."""
+    df = _load_instruments(user_id, "NFO")
+    opts = df[(df["name"] == name.upper()) & (df["instrument_type"] == instrument.upper())]
+    if opts.empty:
+        return {"available": False, "reason": f"No {instrument} contracts found for {name} on Kite's NFO list."}
+
+    today = datetime.now(IST).date()
+    opts = opts.copy()
+    opts["expiry_date"] = pd.to_datetime(opts["expiry"]).dt.date
+    upcoming = opts[opts["expiry_date"] >= today]
+    if upcoming.empty:
+        return {"available": False, "reason": f"No upcoming {instrument} expiries found for {name}."}
+
+    nearest_expiry = upcoming["expiry_date"].min()
+    at_expiry = upcoming[upcoming["expiry_date"] == nearest_expiry]
+    match = at_expiry[(at_expiry["strike"] - strike).abs() < 0.5]
+    if match.empty:
+        return {"available": False, "reason": f"Strike {strike} not found for {name} {instrument} at the nearest expiry."}
+    closest = match.iloc[0]
+
+    tradingsymbol = closest["tradingsymbol"]
+    kite = get_client(user_id)
+    try:
+        quote = kite.quote([f"NFO:{tradingsymbol}"])[f"NFO:{tradingsymbol}"]
+    except Exception as e:
+        return {"available": False, "reason": f"Quote fetch failed for {tradingsymbol}: {e}"}
+
+    return {
+        "available": True,
+        "source": "kite",
+        "tradingsymbol": tradingsymbol,
+        "expiry": nearest_expiry.isoformat(),
+        "strike": float(closest["strike"]),
+        "ltp": quote.get("last_price"),
+    }
+
+
 def fetch_fo_underlyings(user_id: int) -> list:
     """F&O-eligible stocks with real lot sizes and expiries, from Kite's own NFO instrument
     dump -- replaces the symbol-name-only list from the free NSE endpoint."""
