@@ -1390,7 +1390,7 @@ async function loadPositions() {
   const tbody = document.querySelector("#positions-table tbody");
   tbody.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="12" style="color:var(--muted)">No open positions${_positionsFilter !== "ALL" ? " for this filter" : ""}. Enable auto-trade in Broker Setup, or positions will appear here once a signal clears your score threshold.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13" style="color:var(--muted)">No open positions${_positionsFilter !== "ALL" ? " for this filter" : ""}. Enable auto-trade in Broker Setup, or positions will appear here once a signal clears your score threshold.</td></tr>`;
     return;
   }
   rows.forEach((o) => {
@@ -1416,6 +1416,11 @@ async function loadPositions() {
       if (targetHit) targetCell = `<span style="color:var(--green)">🎯 ${o.target} (hit)</span>`;
     }
 
+    const riskBits = [];
+    if (o.trailing_enabled) riskBits.push(`Trail ${o.trail_pct}%`);
+    if (o.lock_trigger_pct) riskBits.push(`Lock@${o.lock_trigger_pct}%→${o.lock_pct}%${o.profit_locked ? " ✓" : ""}`);
+    const riskLabel = riskBits.length ? riskBits.join(", ") : "Off";
+
     tr.innerHTML = `
       <td>${o.id}</td>
       <td>${categoryBadge(o.instrument)}</td>
@@ -1428,15 +1433,69 @@ async function loadPositions() {
       <td>${pnlCell}</td>
       <td>${slCell}</td>
       <td>${targetCell}</td>
+      <td><button class="secondary" style="font-size:11px;padding:4px 8px" data-risk-id="${o.id}">${riskLabel}</button></td>
       <td><button class="icon-btn" data-id="${o.id}" title="Close position">✕</button></td>
     `;
-    tr.querySelector("button").onclick = async () => {
+    tr.querySelector("[data-id]").onclick = async () => {
       await fetch(`/api/trading/orders/${o.id}/close`, { method: "POST" });
       loadPositions();
     };
+    tr.querySelector("[data-risk-id]").onclick = () => openRiskModal(o);
     tbody.appendChild(tr);
   });
 }
+
+// ---- Position risk settings modal ----
+let _riskModalOrderId = null;
+
+function openRiskModal(order) {
+  _riskModalOrderId = order.id;
+  $("risk-modal-title").textContent = `Risk settings -- ${order.resolved_symbol || order.symbol}`;
+  $("risk-trailing-enabled").checked = !!order.trailing_enabled;
+  $("risk-trail-pct").value = order.trail_pct ?? "";
+  $("risk-lock-trigger-pct").value = order.lock_trigger_pct ?? "";
+  $("risk-lock-pct").value = order.lock_pct ?? "";
+  $("risk-settings-status").textContent = "";
+  $("risk-modal-backdrop").classList.remove("hidden");
+  $("risk-modal").classList.remove("hidden");
+}
+
+function closeRiskModal() {
+  $("risk-modal-backdrop").classList.add("hidden");
+  $("risk-modal").classList.add("hidden");
+  _riskModalOrderId = null;
+}
+$("btn-close-risk-modal").onclick = closeRiskModal;
+$("risk-modal-backdrop").onclick = closeRiskModal;
+
+$("btn-save-risk-settings").onclick = async () => {
+  if (!_riskModalOrderId) return;
+  const statusEl = $("risk-settings-status");
+  const trailingEnabled = $("risk-trailing-enabled").checked;
+  const trailPct = $("risk-trail-pct").value ? parseFloat($("risk-trail-pct").value) : null;
+  if (trailingEnabled && !trailPct) {
+    statusEl.textContent = "Enter a trail % first.";
+    return;
+  }
+  statusEl.textContent = "Saving…";
+  try {
+    const res = await fetch(`/api/trading/orders/${_riskModalOrderId}/risk-settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trailing_enabled: trailingEnabled,
+        trail_pct: trailPct,
+        lock_trigger_pct: $("risk-lock-trigger-pct").value ? parseFloat($("risk-lock-trigger-pct").value) : null,
+        lock_pct: $("risk-lock-pct").value ? parseFloat($("risk-lock-pct").value) : null,
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
+    closeRiskModal();
+    loadPositions();
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+};
 
 // ---- Order book ----
 async function loadOrderBook() {
@@ -1674,6 +1733,11 @@ async function loadAutoTradeSettings() {
   $("at-auto-graduate").checked = !!s.auto_graduate_enabled;
   $("at-graduate-min-trades").value = s.auto_graduate_min_trades ?? 15;
   $("at-graduate-min-win-rate").value = s.auto_graduate_min_win_rate ?? 75;
+  $("at-trailing-enabled").checked = !!s.default_trailing_enabled;
+  $("at-trail-pct").value = s.default_trail_pct ?? 2;
+  $("at-lock-enabled").checked = !!s.default_lock_enabled;
+  $("at-lock-trigger-pct").value = s.default_lock_trigger_pct ?? 5;
+  $("at-lock-pct").value = s.default_lock_pct ?? 2;
   updateLiveWarning();
 }
 
@@ -1700,6 +1764,11 @@ $("btn-save-at-settings").onclick = async () => {
     auto_graduate_enabled: $("at-auto-graduate").checked,
     auto_graduate_min_trades: parseInt($("at-graduate-min-trades").value, 10),
     auto_graduate_min_win_rate: parseFloat($("at-graduate-min-win-rate").value),
+    default_trailing_enabled: $("at-trailing-enabled").checked,
+    default_trail_pct: parseFloat($("at-trail-pct").value) || 2,
+    default_lock_enabled: $("at-lock-enabled").checked,
+    default_lock_trigger_pct: parseFloat($("at-lock-trigger-pct").value) || 5,
+    default_lock_pct: parseFloat($("at-lock-pct").value) || 0,
   };
   statusEl.textContent = "Saving…";
   try {

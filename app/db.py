@@ -372,6 +372,22 @@ def init_db():
         if "sl_alert_sent" not in orders_cols:
             conn.execute("ALTER TABLE orders ADD COLUMN sl_alert_sent INTEGER NOT NULL DEFAULT 0")
             conn.commit()
+        if "trailing_enabled" not in orders_cols:
+            conn.execute("ALTER TABLE orders ADD COLUMN trailing_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.execute("ALTER TABLE orders ADD COLUMN trail_pct REAL")
+            conn.execute("ALTER TABLE orders ADD COLUMN lock_trigger_pct REAL")
+            conn.execute("ALTER TABLE orders ADD COLUMN lock_pct REAL")
+            conn.execute("ALTER TABLE orders ADD COLUMN peak_price REAL")
+            conn.execute("ALTER TABLE orders ADD COLUMN profit_locked INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+
+        if "default_trailing_enabled" not in ats_cols:
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_trailing_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_trail_pct REAL NOT NULL DEFAULT 2")
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_trigger_pct REAL NOT NULL DEFAULT 5")
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_pct REAL NOT NULL DEFAULT 2")
+            conn.commit()
     finally:
         conn.close()
 
@@ -848,6 +864,11 @@ DEFAULT_SETTINGS = {
     "auto_graduate_enabled": False,
     "auto_graduate_min_trades": 15,
     "auto_graduate_min_win_rate": 75,
+    "default_trailing_enabled": False,
+    "default_trail_pct": 2,
+    "default_lock_enabled": False,
+    "default_lock_trigger_pct": 5,
+    "default_lock_pct": 2,
 }
 
 
@@ -880,7 +901,8 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
             UPDATE auto_trade_settings
             SET enabled = ?, mode = ?, min_score = ?, quantity = ?, max_open_positions = ?, max_daily_loss = ?,
                 position_sizing_enabled = ?, auto_graduate_enabled = ?, auto_graduate_min_trades = ?,
-                auto_graduate_min_win_rate = ?
+                auto_graduate_min_win_rate = ?, default_trailing_enabled = ?, default_trail_pct = ?,
+                default_lock_enabled = ?, default_lock_trigger_pct = ?, default_lock_pct = ?
             WHERE user_id = ?
             """,
             (
@@ -894,6 +916,11 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
                 1 if current["auto_graduate_enabled"] else 0,
                 current["auto_graduate_min_trades"],
                 current["auto_graduate_min_win_rate"],
+                1 if current["default_trailing_enabled"] else 0,
+                current["default_trail_pct"],
+                1 if current["default_lock_enabled"] else 0,
+                current["default_lock_trigger_pct"],
+                current["default_lock_pct"],
                 user_id,
             ),
         )
@@ -982,8 +1009,9 @@ def insert_order(user_id: int, order: dict) -> int:
             """
             INSERT INTO orders
             (user_id, created_at, signal_id, mode, symbol, resolved_symbol, instrument, strike, side,
-             quantity, entry_price, sl, target, status, broker, broker_order_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+             quantity, entry_price, sl, target, status, broker, broker_order_id,
+             trailing_enabled, trail_pct, lock_trigger_pct, lock_pct, peak_price)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -1001,6 +1029,11 @@ def insert_order(user_id: int, order: dict) -> int:
                 order.get("target"),
                 order.get("broker"),
                 order.get("broker_order_id"),
+                1 if order.get("trailing_enabled") else 0,
+                order.get("trail_pct"),
+                order.get("lock_trigger_pct"),
+                order.get("lock_pct"),
+                order.get("entry_price"),  # peak_price starts at entry
             ),
         )
         conn.commit()
@@ -1091,6 +1124,43 @@ def close_order(order_id: int, exit_price: float, exit_reason: str, pnl: float) 
         )
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_order_risk_settings(
+    user_id: int, order_id: int, trailing_enabled: bool, trail_pct: float, lock_trigger_pct: float, lock_pct: float
+) -> dict:
+    """Per-position risk-manager override -- lets a user turn on trailing/profit-lock (or
+    change the %s) on an already-open position, not just at entry time via the per-user
+    defaults. Resets profit_locked to 0 so a freshly-lowered lock_trigger_pct gets a chance to
+    fire again rather than staying permanently skipped from before the edit."""
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            UPDATE orders
+            SET trailing_enabled = ?, trail_pct = ?, lock_trigger_pct = ?, lock_pct = ?, profit_locked = 0
+            WHERE id = ? AND user_id = ?
+            """,
+            (1 if trailing_enabled else 0, trail_pct, lock_trigger_pct, lock_pct, order_id, user_id),
+        )
+        conn.commit()
+        return get_order(user_id, order_id)
+    finally:
+        conn.close()
+
+
+def update_order_risk_state(order_id: int, sl: float, peak_price: float, profit_locked: bool) -> None:
+    """Persists the tick-by-tick outcome of trading.apply_risk_management() -- called from the
+    60s position-monitor loop, never directly by a user action."""
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE orders SET sl = ?, peak_price = ?, profit_locked = ? WHERE id = ?",
+            (sl, peak_price, 1 if profit_locked else 0, order_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 

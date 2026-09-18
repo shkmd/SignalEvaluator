@@ -463,6 +463,11 @@ class AutoTradeSettingsRequest(BaseModel):
     auto_graduate_enabled: Optional[bool] = None
     auto_graduate_min_trades: Optional[int] = None
     auto_graduate_min_win_rate: Optional[float] = None
+    default_trailing_enabled: Optional[bool] = None
+    default_trail_pct: Optional[float] = None
+    default_lock_enabled: Optional[bool] = None
+    default_lock_trigger_pct: Optional[float] = None
+    default_lock_pct: Optional[float] = None
 
 
 @app.get("/api/trading/settings")
@@ -479,6 +484,12 @@ def save_trading_settings(req: AutoTradeSettingsRequest, user_id: int = Depends(
         raise HTTPException(status_code=400, detail="auto_graduate_min_win_rate must be between 0 and 100")
     if "auto_graduate_min_trades" in updates and updates["auto_graduate_min_trades"] < 1:
         raise HTTPException(status_code=400, detail="auto_graduate_min_trades must be at least 1")
+    if "default_trail_pct" in updates and not (0 < updates["default_trail_pct"] <= 50):
+        raise HTTPException(status_code=400, detail="default_trail_pct must be between 0 and 50")
+    if "default_lock_trigger_pct" in updates and not (0 < updates["default_lock_trigger_pct"] <= 100):
+        raise HTTPException(status_code=400, detail="default_lock_trigger_pct must be between 0 and 100")
+    if "default_lock_pct" in updates and not (0 <= updates["default_lock_pct"] <= 100):
+        raise HTTPException(status_code=400, detail="default_lock_pct must be between 0 and 100")
     return db.save_auto_trade_settings(user_id, updates)
 
 
@@ -512,6 +523,31 @@ def get_pnl_summary(mode: str = "paper", user_id: int = Depends(current_user_id)
         "realized_today": db.daily_realized_pnl(user_id, mode=mode),
         "open_positions": db.count_open_positions(user_id, mode=mode),
     }
+
+
+class OrderRiskSettingsRequest(BaseModel):
+    trailing_enabled: bool = False
+    trail_pct: Optional[float] = None
+    lock_trigger_pct: Optional[float] = None
+    lock_pct: Optional[float] = None
+
+
+@app.post("/api/trading/orders/{order_id}/risk-settings")
+def save_order_risk_settings(order_id: int, req: OrderRiskSettingsRequest, user_id: int = Depends(current_user_id)):
+    order = db.get_order(user_id, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order["status"] != "open":
+        raise HTTPException(status_code=400, detail="Only an open position can have its risk settings changed.")
+    if req.trailing_enabled and not req.trail_pct:
+        raise HTTPException(status_code=400, detail="trail_pct is required when trailing is enabled.")
+    if req.trail_pct is not None and not (0 < req.trail_pct <= 50):
+        raise HTTPException(status_code=400, detail="trail_pct must be between 0 and 50.")
+    if req.lock_trigger_pct is not None and not (0 < req.lock_trigger_pct <= 100):
+        raise HTTPException(status_code=400, detail="lock_trigger_pct must be between 0 and 100.")
+    if req.lock_pct is not None and not (0 <= req.lock_pct <= 100):
+        raise HTTPException(status_code=400, detail="lock_pct must be between 0 and 100.")
+    return db.update_order_risk_settings(user_id, order_id, req.trailing_enabled, req.trail_pct, req.lock_trigger_pct, req.lock_pct)
 
 
 class BrokerConnectRequest(BaseModel):

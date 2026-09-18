@@ -178,6 +178,10 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
     quantity = size_for_reliability(user_id, signal_id, settings["quantity"])
 
     targets = signal.get("targets") or []
+    # Risk Manager defaults: independent of which auto-trade path opened this order (general
+    # Broker-Setup auto-trade, F&O Scanner, a Telegram channel) -- trailing/profit-lock is a
+    # global per-user preference, same pattern as size_for_reliability()'s own settings lookup.
+    risk_defaults = db.get_auto_trade_settings(user_id)
     order_id = db.insert_order(
         user_id,
         {
@@ -193,6 +197,10 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
             "sl": signal.get("sl"),
             "target": min(targets) if targets and side == "buy" else (max(targets) if targets else None),
             "broker": None,
+            "trailing_enabled": risk_defaults.get("default_trailing_enabled"),
+            "trail_pct": risk_defaults.get("default_trail_pct"),
+            "lock_trigger_pct": risk_defaults.get("default_lock_trigger_pct") if risk_defaults.get("default_lock_enabled") else None,
+            "lock_pct": risk_defaults.get("default_lock_pct") if risk_defaults.get("default_lock_enabled") else None,
         },
     )
     return {"placed": True, "order_id": order_id, "mode": "paper", "entry_price": entry_price, "quantity": quantity}
@@ -372,6 +380,53 @@ def _calc_pnl(order: dict, exit_price: float) -> float:
     return round((entry - exit_price) * qty, 2)
 
 
+def apply_risk_management(order: dict, current_price: float) -> dict:
+    """Risk Manager: trailing stop-loss and one-time profit-lock, evaluated fresh every monitor
+    tick. Always returns the order's up-to-date sl/peak_price/profit_locked plus a "changed"
+    flag -- the caller applies these to the order dict for THIS tick's hit-check even when
+    changed is False, so callers don't need their own separate fallback logic.
+
+    - Profit lock (one-time ratchet): once unrealized profit crosses lock_trigger_pct, SL jumps
+      to the level that locks in lock_pct profit -- fires once (profit_locked), not repeatedly.
+    - Trailing stop (continuous): once trailing_enabled, SL follows the best price seen since
+      entry (peak_price) by trail_pct, re-evaluated every tick.
+    - Combined, and either alone: SL only ever tightens (moves toward locking in more profit),
+      never loosens, regardless of which rule proposed the move -- the better of the two wins.
+    """
+    is_long = order["side"] == "buy"
+    entry = order.get("entry_price")
+    sl = order.get("sl")
+    peak_price = order.get("peak_price") or entry
+    profit_locked = bool(order.get("profit_locked"))
+    changed = False
+
+    if entry:
+        new_peak = max(peak_price, current_price) if is_long else min(peak_price, current_price)
+        if new_peak != peak_price:
+            peak_price = new_peak
+            changed = True
+
+        def _better(candidate):
+            return candidate is not None and (sl is None or (candidate > sl if is_long else candidate < sl))
+
+        if not profit_locked and order.get("lock_trigger_pct") and order.get("lock_pct") is not None:
+            profit_pct = ((current_price - entry) / entry * 100) if is_long else ((entry - current_price) / entry * 100)
+            if profit_pct >= order["lock_trigger_pct"]:
+                lock_sl = entry * (1 + order["lock_pct"] / 100) if is_long else entry * (1 - order["lock_pct"] / 100)
+                profit_locked = True
+                changed = True
+                if _better(lock_sl):
+                    sl = round(lock_sl, 2)
+
+        if order.get("trailing_enabled") and order.get("trail_pct"):
+            trail_sl = peak_price * (1 - order["trail_pct"] / 100) if is_long else peak_price * (1 + order["trail_pct"] / 100)
+            if _better(trail_sl):
+                sl = round(trail_sl, 2)
+                changed = True
+
+    return {"sl": sl, "peak_price": peak_price, "profit_locked": profit_locked, "changed": changed}
+
+
 def _check_hit(order: dict, price: float) -> str | None:
     if order["side"] == "buy":
         if order["sl"] and price <= order["sl"]:
@@ -398,6 +453,11 @@ def monitor_open_positions() -> list:
         if not price_info["available"]:
             continue
         price = price_info["price"]
+
+        risk = apply_risk_management(order, price)
+        if risk["changed"]:
+            db.update_order_risk_state(order["id"], risk["sl"], risk["peak_price"], risk["profit_locked"])
+        order = {**order, "sl": risk["sl"], "peak_price": risk["peak_price"], "profit_locked": risk["profit_locked"]}
 
         hit = _check_hit(order, price)
 

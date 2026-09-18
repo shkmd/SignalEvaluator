@@ -730,7 +730,7 @@ Target 16/18/20/24/30+"></textarea>
         </div>
         <table id="positions-table" style="margin-top:14px">
           <thead>
-            <tr><th>ID</th><th>Category</th><th>Mode</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>LTP</th><th>Unrealized P&amp;L</th><th>SL</th><th>Target</th><th></th></tr>
+            <tr><th>ID</th><th>Category</th><th>Mode</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>LTP</th><th>Unrealized P&amp;L</th><th>SL</th><th>Target</th><th>Risk</th><th></th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -822,6 +822,34 @@ Target 16/18/20/24/30+"></textarea>
           click from you per channel. You'll get a Telegram alert the moment it happens (and again
           if it's later auto-demoted back to paper after its win rate drops). Requires a broker
           connected below. Off by default; turn on only once you trust the numbers on Channel Stats.</div>
+        </div>
+
+        <div class="row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="at-trailing-enabled" style="width:auto" />
+            Trailing stop-loss by default
+          </label>
+          <input id="at-trail-pct" type="number" min="0.1" max="50" step="0.1" style="width:80px" />
+          <span style="color:var(--muted);font-size:12px">% behind the best price seen</span>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="at-lock-enabled" style="width:auto" />
+            Lock in profit by default
+          </label>
+          <span style="color:var(--muted);font-size:12px">once up</span>
+          <input id="at-lock-trigger-pct" type="number" min="0.1" max="100" step="0.1" style="width:70px" />
+          <span style="color:var(--muted);font-size:12px">%, move SL to lock at least</span>
+          <input id="at-lock-pct" type="number" min="0" max="100" step="0.1" style="width:70px" />
+          <span style="color:var(--muted);font-size:12px">%</span>
+        </div>
+        <div style="color:var(--muted);font-size:12px;margin-top:4px">
+          Risk Manager, applied to every new paper position going forward (edit an individual
+          position's settings from its row in Positions). Trailing continuously tightens the SL
+          as price makes new favorable highs/lows, never loosens it. Profit-lock is a one-time
+          move: once unrealized profit crosses the trigger, SL jumps to guarantee at least the
+          locked %. Both can be on together -- whichever gives the better SL wins. Paper only for
+          now; live positions don't auto-close yet (see the warning above the Mode field).
         </div>
 
         <div class="row">
@@ -1167,6 +1195,38 @@ Target 16/18/20/24/30+"></textarea>
       <button class="icon-btn" id="btn-tm-close-trade">✕</button>
     </div>
     <div id="tm-trade-modal-body"></div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="risk-modal-backdrop"></div>
+  <div class="modal hidden" id="risk-modal" style="width:min(480px, 95vw)">
+    <div class="modal-header">
+      <h2 id="risk-modal-title" style="margin:0">Position risk settings</h2>
+      <button class="icon-btn" id="btn-close-risk-modal">✕</button>
+    </div>
+    <div class="row" style="margin-top:4px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="risk-trailing-enabled" style="width:auto" />
+        Trailing stop-loss
+      </label>
+      <input id="risk-trail-pct" type="number" min="0.1" max="50" step="0.1" style="width:80px" placeholder="%" />
+      <span style="color:var(--muted);font-size:12px">% behind best price</span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label>Lock trigger %
+        <input id="risk-lock-trigger-pct" type="number" min="0.1" max="100" step="0.1" placeholder="e.g. 5" />
+      </label>
+      <label>Lock at %
+        <input id="risk-lock-pct" type="number" min="0" max="100" step="0.1" placeholder="e.g. 2" />
+      </label>
+    </div>
+    <div style="color:var(--muted);font-size:12px;margin-top:8px">
+      Leave the lock fields blank to disable profit-lock for this position. SL only ever
+      tightens -- these rules never move it against you.
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btn-save-risk-settings">Save</button>
+      <span id="risk-settings-status" style="color:var(--muted);font-size:12px"></span>
+    </div>
   </div>
 
   <div class="modal-backdrop hidden" id="scan-modal-backdrop"></div>
