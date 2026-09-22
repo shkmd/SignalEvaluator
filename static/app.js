@@ -4,6 +4,10 @@ const $ = (id) => document.getElementById(id);
 function showAuthGate() {
   $("auth-gate").classList.remove("hidden");
   $("app-shell").classList.add("hidden");
+  if (_positionsPollTimer) {
+    clearInterval(_positionsPollTimer);
+    _positionsPollTimer = null;
+  }
 }
 
 function showApp(user) {
@@ -101,6 +105,9 @@ const tabs = {
   trademind: { btn: $("tab-trademind"), view: $("view-trademind"), title: "TradeMind" },
   profile: { btn: $("tab-profile"), view: $("view-profile"), title: "Profile" },
 };
+const POSITIONS_POLL_MS = 10000;
+let _positionsPollTimer = null;
+
 function showTab(name) {
   Object.entries(tabs).forEach(([k, t]) => {
     t.btn.classList.toggle("active", k === name);
@@ -119,6 +126,17 @@ function showTab(name) {
   if (name === "strategy") loadStrategyTab();
   if (name === "backtest") loadBacktestTab();
   if (name === "dashboard") loadDashboard();
+
+  // Live LTP only matters while you're actually looking at Positions -- polling in the
+  // background on every other tab would just burn live-price API calls (NSE/broker) for
+  // nothing, so the interval starts/stops as you enter/leave this one tab.
+  if (_positionsPollTimer) {
+    clearInterval(_positionsPollTimer);
+    _positionsPollTimer = null;
+  }
+  if (name === "positions") {
+    _positionsPollTimer = setInterval(loadPositions, POSITIONS_POLL_MS);
+  }
 }
 Object.entries(tabs).forEach(([name, t]) => (t.btn.onclick = () => showTab(name)));
 
