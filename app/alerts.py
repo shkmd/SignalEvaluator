@@ -75,6 +75,35 @@ def maybe_alert_sl_proximity(user_id: int, order: dict, current_price: float) ->
     return True
 
 
+def alert_live_auto_exit(user_id: int, order: dict, reason: str, exit_price: float, pnl: float) -> None:
+    """Sent whenever the background monitor places a REAL offsetting order on the user's
+    behalf (live_auto_exit_enabled) -- unlike every other alert here, this isn't optional
+    commentary, it's the only record the user gets outside the Order Book that a real order
+    was just placed without them clicking anything."""
+    symbol = order.get("resolved_symbol") or order.get("symbol")
+    text = (
+        f"\U0001F916 Auto-exited a live position\n\n"
+        f"{symbol} ({(order.get('side') or '').upper()}) -- {reason.replace('_', ' ')}\n"
+        f"Exit price: {exit_price}\n"
+        f"P&L: {'+' if pnl >= 0 else ''}{pnl}"
+    )
+    _send(user_id, text, f"live auto-exit alert for order #{order.get('id')}")
+
+
+def alert_live_auto_exit_failed(user_id: int, order: dict, reason: str, failure: str) -> None:
+    """The automatic exit attempt itself failed (broker session expired, contract not
+    resolvable, etc.) -- the position is still genuinely open on the real broker account, so
+    this is deliberately more urgent than a routine SL-proximity nudge."""
+    symbol = order.get("resolved_symbol") or order.get("symbol")
+    text = (
+        f"\U0001F6A8 Auto-exit FAILED -- action needed\n\n"
+        f"{symbol} ({(order.get('side') or '').upper()}) hit its {reason.replace('_', ' ')}, but the "
+        f"automatic exit order failed:\n{failure}\n\n"
+        f"Your real position is still open. Close it manually from the Positions tab."
+    )
+    _send(user_id, text, f"live auto-exit FAILURE alert for order #{order.get('id')}")
+
+
 def alert_graduation(user_id: int, channel: str, win_rate: float, trades: int) -> None:
     text = (
         f"\U0001F680 Auto-graduated to LIVE\n\n"

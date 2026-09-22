@@ -932,8 +932,24 @@ Target 16/18/20/24/30+"></textarea>
           position's settings from its row in Positions). Trailing continuously tightens the SL
           as price makes new favorable highs/lows, never loosens it. Profit-lock is a one-time
           move: once unrealized profit crosses the trigger, SL jumps to guarantee at least the
-          locked %. Both can be on together -- whichever gives the better SL wins. Paper only for
-          now; live positions don't auto-close yet (see the warning above the Mode field).
+          locked %. Both can be on together -- whichever gives the better SL wins. Paper only --
+          it doesn't apply to live positions (see the toggle below for those).
+        </div>
+
+        <div class="row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="at-live-auto-exit" style="width:auto" />
+            Auto-exit live positions on SL/target hit
+          </label>
+        </div>
+        <div class="warnings" style="margin-top:8px">
+          <div>&#9888; Off by default. When on, the background monitor places a REAL offsetting
+          order on your broker account the moment a live position's SL or target is hit -- no
+          click from you. When off (default), a hit only sends a Telegram alert and you close it
+          yourself from Positions, same as today. Either way you'll get a Telegram message: one
+          confirming the real exit, or an urgent one if the automatic attempt itself fails (your
+          position stays genuinely open in that case -- close it manually). Make sure Personal
+          Alerts below is configured so you actually see these.</div>
         </div>
 
         <div class="row">

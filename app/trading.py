@@ -508,10 +508,11 @@ def _check_hit(order: dict, price: float) -> str | None:
 
 def monitor_open_positions() -> list:
     """Checks every open paper position (across all users) against its SL/target using a
-    live price, auto-closing on a hit. Also checks open LIVE positions for SL proximity only
-    (no auto-close -- live has no bracket-exit order wired up yet, see place_live_order()) so
-    the SL-approaching alert can fire there too. Meant to be called periodically by a
-    background task."""
+    live price, auto-closing on a hit. Also checks open LIVE positions: if the user has opted
+    into live_auto_exit_enabled (off by default -- see auto_trade_settings), a hit places a
+    REAL offsetting order via _close_live_order(); otherwise (or if that real order fails) it
+    falls back to the existing SL-proximity Telegram alert, same as before this existed.
+    Meant to be called periodically by a background task."""
     closed = []
     for order in db.list_all_open_orders(mode="paper"):
         price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"], user_id=order["user_id"])
@@ -549,12 +550,35 @@ def monitor_open_positions() -> list:
                 db.mark_sl_alert_sent(order["id"])
 
     for order in db.list_all_open_orders(mode="live"):
-        if order.get("sl_alert_sent"):
-            continue
         price_info = get_live_price(order["resolved_symbol"], order["instrument"], order["strike"], user_id=order["user_id"])
         if not price_info["available"]:
             continue
-        if alerts.maybe_alert_sl_proximity(order["user_id"], order, price_info["price"]):
-            db.mark_sl_alert_sent(order["id"])
+        price = price_info["price"]
+
+        hit = _check_hit(order, price)
+        if hit:
+            settings = db.get_auto_trade_settings(order["user_id"])
+            if settings.get("live_auto_exit_enabled"):
+                try:
+                    result = _close_live_order(order["user_id"], order, hit)
+                except Exception as e:
+                    result = {"closed": False, "reason": str(e)}
+
+                if result.get("closed"):
+                    if order.get("signal_id"):
+                        db.update_outcome(order["user_id"], order["signal_id"], hit)
+                        signal = db.get_signal(order["user_id"], order["signal_id"])
+                        if signal:
+                            graduation.check_and_graduate(order["user_id"], signal["channel"])
+                    alerts.alert_live_auto_exit(order["user_id"], order, hit, result["exit_price"], result["pnl"])
+                    closed.append(
+                        {"order_id": order["id"], "reason": hit, "exit_price": result["exit_price"], "pnl": result["pnl"], "mode": "live"}
+                    )
+                    continue  # exited for real -- nothing left to alert on below
+                alerts.alert_live_auto_exit_failed(order["user_id"], order, hit, result.get("reason", "unknown error"))
+
+        if not order.get("sl_alert_sent"):
+            if alerts.maybe_alert_sl_proximity(order["user_id"], order, price):
+                db.mark_sl_alert_sent(order["id"])
 
     return closed

@@ -449,6 +449,12 @@ def init_db():
             conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_trigger_pct REAL NOT NULL DEFAULT 5")
             conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_pct REAL NOT NULL DEFAULT 2")
             conn.commit()
+        if "live_auto_exit_enabled" not in ats_cols:
+            # Defaults OFF -- nobody with a live-trading setup already configured should have
+            # their behavior silently change to "the monitor loop now places real exit orders
+            # on my behalf" just because of a deploy.
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN live_auto_exit_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
 
         cols = {c["name"] for c in conn.execute("PRAGMA table_info(signals)").fetchall()}
         if "external_ref" not in cols:
@@ -1122,6 +1128,7 @@ DEFAULT_SETTINGS = {
     "default_lock_enabled": False,
     "default_lock_trigger_pct": 5,
     "default_lock_pct": 2,
+    "live_auto_exit_enabled": False,
 }
 
 
@@ -1155,7 +1162,8 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
             SET enabled = ?, mode = ?, min_score = ?, quantity = ?, max_open_positions = ?, max_daily_loss = ?,
                 position_sizing_enabled = ?, auto_graduate_enabled = ?, auto_graduate_min_trades = ?,
                 auto_graduate_min_win_rate = ?, default_trailing_enabled = ?, default_trail_pct = ?,
-                default_lock_enabled = ?, default_lock_trigger_pct = ?, default_lock_pct = ?
+                default_lock_enabled = ?, default_lock_trigger_pct = ?, default_lock_pct = ?,
+                live_auto_exit_enabled = ?
             WHERE user_id = ?
             """,
             (
@@ -1174,6 +1182,7 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
                 1 if current["default_lock_enabled"] else 0,
                 current["default_lock_trigger_pct"],
                 current["default_lock_pct"],
+                1 if current["live_auto_exit_enabled"] else 0,
                 user_id,
             ),
         )

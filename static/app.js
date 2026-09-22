@@ -1934,13 +1934,14 @@ async function loadAutoTradeSettings() {
   $("at-lock-enabled").checked = !!s.default_lock_enabled;
   $("at-lock-trigger-pct").value = s.default_lock_trigger_pct ?? 5;
   $("at-lock-pct").value = s.default_lock_pct ?? 2;
+  $("at-live-auto-exit").checked = !!s.live_auto_exit_enabled;
   updateLiveWarning();
 }
 
 function updateLiveWarning() {
   const warnEl = $("at-live-warning");
   if ($("at-mode").value === "live") {
-    warnEl.innerHTML = `<div>⚠ Live mode places REAL orders on your connected broker account with REAL money when a signal clears your score threshold -- no per-trade confirmation, equity or options both. Options quantity is rounded up to a full lot using your broker's own lot size. There's no automatic exit yet -- SL/target only send you a Telegram alert, and you close the position yourself from the Positions tab (which places a real offsetting order). Make sure your broker below shows "logged in today" first, and that you've paper-traded this setup enough to trust it. If no broker is connected, live signals are logged as "not placed" with a reason, never silently skipped.</div>`;
+    warnEl.innerHTML = `<div>⚠ Live mode places REAL orders on your connected broker account with REAL money when a signal clears your score threshold -- no per-trade confirmation, equity or options both. Options quantity is rounded up to a full lot using your broker's own lot size. By default SL/target only send you a Telegram alert and you close the position yourself from the Positions tab -- turn on "Auto-exit live positions" below to have the monitor place that exit order automatically instead. Make sure your broker below shows "logged in today" first, and that you've paper-traded this setup enough to trust it. If no broker is connected, live signals are logged as "not placed" with a reason, never silently skipped.</div>`;
   } else {
     warnEl.innerHTML = "";
   }
@@ -1965,6 +1966,7 @@ $("btn-save-at-settings").onclick = async () => {
     default_lock_enabled: $("at-lock-enabled").checked,
     default_lock_trigger_pct: parseFloat($("at-lock-trigger-pct").value) || 5,
     default_lock_pct: parseFloat($("at-lock-pct").value) || 0,
+    live_auto_exit_enabled: $("at-live-auto-exit").checked,
   };
   statusEl.textContent = "Saving…";
   try {

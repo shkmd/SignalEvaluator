@@ -558,6 +558,7 @@ class AutoTradeSettingsRequest(BaseModel):
     default_lock_enabled: Optional[bool] = None
     default_lock_trigger_pct: Optional[float] = None
     default_lock_pct: Optional[float] = None
+    live_auto_exit_enabled: Optional[bool] = None
 
 
 @app.get("/api/trading/settings")
