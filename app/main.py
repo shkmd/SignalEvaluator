@@ -12,7 +12,7 @@ from typing import Optional, List
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
 from app import fo_universe, scanner, telegram_broadcast, alerts, strategies as strategies_mod, backtest as backtest_mod
-from app import chartink
+from app import chartink, rate_limit
 from app.brokers import kite as kite_broker, upstox as upstox_broker, dhan as dhan_broker
 from app.trademind.schema import init_tm_schema
 from app.trademind.routes import router as trademind_router
@@ -137,13 +137,38 @@ def _set_session_cookie(response: Response, token: str):
     )
 
 
+def _client_ip(request: Request) -> str:
+    # Railway terminates all external traffic at its own edge proxy -- this app is never
+    # reachable directly -- so the X-Forwarded-For it sets is trustworthy, not
+    # client-spoofable. request.client.host alone would just be Railway's internal edge IP
+    # for every request (uvicorn isn't run with --proxy-headers here), which would bucket
+    # every user under the same rate-limit key.
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limited(key: str, max_attempts: int, window_seconds: int) -> None:
+    allowed, retry_after = rate_limit.check(key, max_attempts, window_seconds)
+    if not allowed:
+        minutes = retry_after // 60 + 1
+        raise HTTPException(status_code=429, detail=f"Too many attempts -- try again in {minutes} minute(s).")
+
+
 @app.post("/api/auth/signup")
-def signup(req: SignupRequest, response: Response):
+def signup(req: SignupRequest, request: Request, response: Response):
+    # Per-IP, not per-email -- signup has no existing account to lock out, so the abuse this
+    # guards against is mass account creation from one source, not credential guessing.
+    ip_key = f"signup:{_client_ip(request)}"
+    _rate_limited(ip_key, max_attempts=10, window_seconds=3600)
+
     if db.get_user_by_email(req.email):
         raise HTTPException(status_code=400, detail="An account with this email already exists.")
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
 
+    rate_limit.record(ip_key)
     password_hash = auth.hash_password(req.password)
     verification_token = secrets.token_urlsafe(24)
     user_id = db.create_user(req.email, password_hash, verification_token)
@@ -159,10 +184,17 @@ def signup(req: SignupRequest, response: Response):
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest, response: Response):
+    # Keyed by email, not IP -- the threat this guards against is brute-forcing one specific
+    # account's password, which an attacker can do from many different IPs.
+    email_key = f"login:{req.email.lower().strip()}"
+    _rate_limited(email_key, max_attempts=5, window_seconds=900)
+
     user = db.get_user_by_email(req.email)
     if not user or not auth.verify_password(req.password, user["password_hash"]):
+        rate_limit.record(email_key)
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
+    rate_limit.reset(email_key)
     token, _ = auth.create_session_for_user(user["id"])
     _set_session_cookie(response, token)
     return {"user": {"id": user["id"], "email": user["email"], "email_verified": bool(user["email_verified"])}}
@@ -194,11 +226,19 @@ class ChangePasswordRequest(BaseModel):
 
 @app.post("/api/auth/change-password")
 def change_password(req: ChangePasswordRequest, request: Request, user: dict = Depends(auth.require_user)):
+    # Guards against a hijacked/stolen session cookie being used to brute-force the current
+    # password (e.g. to then lock the real owner out by changing it) -- a narrower threat than
+    # login's, since it requires an already-valid session, but cheap enough to add regardless.
+    pw_key = f"change-password:{user['id']}"
+    _rate_limited(pw_key, max_attempts=5, window_seconds=900)
+
     if not auth.verify_password(req.current_password, user["password_hash"]):
+        rate_limit.record(pw_key)
         raise HTTPException(status_code=401, detail="Current password is incorrect.")
     if len(req.new_password) < 8:
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
 
+    rate_limit.reset(pw_key)
     db.update_password_hash(user["id"], auth.hash_password(req.new_password))
     current_token = request.cookies.get(auth.SESSION_COOKIE)
     signed_out = db.delete_all_sessions_for_user(user["id"], except_token=current_token)
