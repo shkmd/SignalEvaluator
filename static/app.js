@@ -16,7 +16,11 @@ function showApp(user) {
   $("sidebar-user-email").textContent = user.email;
   refreshTicker();
   refreshSidebarConn();
-  loadDashboard();
+  let savedTab = null;
+  try {
+    savedTab = localStorage.getItem("activeTab");
+  } catch (e) {}
+  showTab(savedTab && tabs[savedTab] ? savedTab : "dashboard");
 }
 
 async function checkAuth() {
@@ -114,6 +118,9 @@ function showTab(name) {
     t.view.classList.toggle("hidden", k !== name);
   });
   $("page-title").textContent = tabs[name].title;
+  try {
+    localStorage.setItem("activeTab", name);
+  } catch (e) {}
   if (name === "history") loadHistory();
   if (name === "stats") loadStats();
   if (name === "telegram") loadTelegramTab();
