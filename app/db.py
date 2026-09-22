@@ -1,4 +1,5 @@
 import json
+import secrets
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
@@ -58,11 +59,15 @@ CREATE TABLE IF NOT EXISTS signals (
     telegram_chat_id INTEGER,
     telegram_message_id INTEGER,
     lot_size INTEGER,
+    external_ref TEXT,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_telegram_msg
     ON signals(user_id, telegram_chat_id, telegram_message_id)
     WHERE telegram_chat_id IS NOT NULL AND telegram_message_id IS NOT NULL;
+-- idx_signals_external_ref is created in init_db() below, not here -- on an existing install
+-- this script runs before the external_ref column migration adds the column, and an index on
+-- a not-yet-existing column would fail the whole executescript.
 
 CREATE TABLE IF NOT EXISTS monitored_channels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -297,6 +302,35 @@ CREATE TABLE IF NOT EXISTS alert_settings (
     sl_proximity_pct REAL NOT NULL DEFAULT 2.0,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+-- Chartink can't send auth headers on its webhook alerts, so the token embedded in the
+-- webhook URL itself is the only thing identifying which user (and which scan) a hit belongs to.
+CREATE TABLE IF NOT EXISTS chartink_settings (
+    user_id INTEGER PRIMARY KEY,
+    webhook_token TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- One row per distinct Chartink scan a user's webhook has ever received a hit from --
+-- auto-created (disabled-for-trading by default direction='bullish') the first time it fires,
+-- then the user assigns it a direction (Chartink itself doesn't say bullish/bearish) and
+-- optionally turns on its own dedicated paper-trade, same pattern as telegram_paper_trade_settings
+-- and scanner_signal_settings but scoped per-scan instead of being one global toggle.
+CREATE TABLE IF NOT EXISTS chartink_scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    scan_url TEXT NOT NULL,
+    scan_name TEXT,
+    direction TEXT NOT NULL DEFAULT 'bullish',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    paper_trade_enabled INTEGER NOT NULL DEFAULT 0,
+    paper_trade_min_score REAL NOT NULL DEFAULT 70,
+    first_seen_at TEXT NOT NULL,
+    last_triggered_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    UNIQUE(user_id, scan_url)
+);
 """
 
 
@@ -388,6 +422,19 @@ def init_db():
             conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_trigger_pct REAL NOT NULL DEFAULT 5")
             conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_pct REAL NOT NULL DEFAULT 2")
             conn.commit()
+
+        cols = {c["name"] for c in conn.execute("PRAGMA table_info(signals)").fetchall()}
+        if "external_ref" not in cols:
+            conn.execute("ALTER TABLE signals ADD COLUMN external_ref TEXT")
+            conn.commit()
+        # Always ensured (not just on first add) -- a fresh install gets the column via SCHEMA
+        # directly, with no ALTER TABLE branch above ever running, so the index still needs to
+        # be created unconditionally here rather than only inside the migration branch.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_external_ref "
+            "ON signals(user_id, source, external_ref) WHERE external_ref IS NOT NULL"
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -538,6 +585,7 @@ def insert_signal(
     source: str = "manual",
     telegram_chat_id: int = None,
     telegram_message_id: int = None,
+    external_ref: str = None,
 ) -> int:
     conn = _conn()
     try:
@@ -559,8 +607,8 @@ def insert_signal(
             INSERT OR IGNORE INTO signals
             (user_id, created_at, channel, raw_text, symbol, resolved_symbol, instrument, strike,
              signal_type, entry_low, entry_high, sl, targets, score, verdict, direction,
-             red_flags, evaluation_json, outcome, source, telegram_chat_id, telegram_message_id, lot_size)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+             red_flags, evaluation_json, outcome, source, telegram_chat_id, telegram_message_id, lot_size, external_ref)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -585,6 +633,7 @@ def insert_signal(
                 telegram_chat_id,
                 telegram_message_id,
                 lot_size,
+                external_ref,
             ),
         )
         conn.commit()
@@ -739,6 +788,122 @@ def get_channel_title(user_id: int, chat_id: int) -> str:
             "SELECT title FROM monitored_channels WHERE telegram_chat_id = ? AND user_id = ?", (chat_id, user_id)
         ).fetchone()
         return row["title"] if row else None
+    finally:
+        conn.close()
+
+
+# ---- Chartink webhook ----
+
+def get_or_create_chartink_token(user_id: int) -> str:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT webhook_token FROM chartink_settings WHERE user_id = ?", (user_id,)).fetchone()
+        if row:
+            return row["webhook_token"]
+        token = secrets.token_urlsafe(24)
+        conn.execute(
+            "INSERT INTO chartink_settings (user_id, webhook_token, created_at) VALUES (?, ?, ?)",
+            (user_id, token, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def regenerate_chartink_token(user_id: int) -> str:
+    conn = _conn()
+    try:
+        token = secrets.token_urlsafe(24)
+        conn.execute(
+            """
+            INSERT INTO chartink_settings (user_id, webhook_token, created_at) VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET webhook_token = excluded.webhook_token
+            """,
+            (user_id, token, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def get_user_id_by_chartink_token(token: str) -> int:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT user_id FROM chartink_settings WHERE webhook_token = ?", (token,)).fetchone()
+        return row["user_id"] if row else None
+    finally:
+        conn.close()
+
+
+def get_or_create_chartink_scan(user_id: int, scan_url: str, scan_name: str) -> dict:
+    """Upserts the (user, scan) row on every webhook hit -- refreshes scan_name/last_triggered_at
+    but preserves the user's own direction/enabled/paper-trade settings once they've set them."""
+    conn = _conn()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO chartink_scans (user_id, scan_url, scan_name, first_seen_at, last_triggered_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, scan_url) DO UPDATE SET
+                scan_name = excluded.scan_name,
+                last_triggered_at = excluded.last_triggered_at
+            """,
+            (user_id, scan_url, scan_name, now, now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM chartink_scans WHERE user_id = ? AND scan_url = ?", (user_id, scan_url)
+        ).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def list_chartink_scans(user_id: int) -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM chartink_scans WHERE user_id = ? ORDER BY last_triggered_at DESC", (user_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_chartink_scan(
+    user_id: int,
+    scan_id: int,
+    direction: str = None,
+    enabled: bool = None,
+    paper_trade_enabled: bool = None,
+    paper_trade_min_score: float = None,
+) -> bool:
+    conn = _conn()
+    try:
+        sets, params = [], []
+        if direction is not None:
+            sets.append("direction = ?")
+            params.append(direction)
+        if enabled is not None:
+            sets.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if paper_trade_enabled is not None:
+            sets.append("paper_trade_enabled = ?")
+            params.append(1 if paper_trade_enabled else 0)
+        if paper_trade_min_score is not None:
+            sets.append("paper_trade_min_score = ?")
+            params.append(paper_trade_min_score)
+        if not sets:
+            return False
+        params.extend([scan_id, user_id])
+        cur = conn.execute(
+            f"UPDATE chartink_scans SET {', '.join(sets)} WHERE id = ? AND user_id = ?", params
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()
 

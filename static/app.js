@@ -105,6 +105,7 @@ const tabs = {
   history: { btn: $("tab-history"), view: $("view-history"), title: "Signal History" },
   stats: { btn: $("tab-stats"), view: $("view-stats"), title: "Channel Stats" },
   telegram: { btn: $("tab-telegram"), view: $("view-telegram"), title: "Telegram Config" },
+  chartink: { btn: $("tab-chartink"), view: $("view-chartink"), title: "Chartink" },
   positions: { btn: $("tab-positions"), view: $("view-positions"), title: "Positions" },
   orderbook: { btn: $("tab-orderbook"), view: $("view-orderbook"), title: "Order Book" },
   broker: { btn: $("tab-broker"), view: $("view-broker"), title: "Broker Setup" },
@@ -126,6 +127,7 @@ function showTab(name) {
   if (name === "history") loadHistory();
   if (name === "stats") loadStats();
   if (name === "telegram") loadTelegramTab();
+  if (name === "chartink") loadChartinkTab();
   if (name === "positions") loadPositions();
   if (name === "orderbook") loadOrderBook();
   if (name === "broker") loadBrokerTab();
@@ -677,7 +679,7 @@ function renderSignalRows(rows, tableSelector) {
     const { lot, maxProfit, maxLoss } = computeMaxPL(s);
     tr.innerHTML = `
       <td>${s.id}</td>
-      <td>${s.source === "telegram" ? "📡" : s.source === "scanner" ? "🔍" : "✍️"}</td>
+      <td>${s.source === "telegram" ? "📡" : s.source === "scanner" ? "🔍" : s.source === "chartink" ? "📈" : "✍️"}</td>
       <td>${s.channel}</td>
       <td>${s.resolved_symbol || s.symbol}${s.instrument !== "EQ" ? " " + s.strike + s.instrument : ""}</td>
       <td>${s.signal_type}</td>
@@ -1319,6 +1321,86 @@ $("btn-sync-channels").onclick = async () => {
   }
 };
 
+// ---- Chartink ----
+async function loadChartinkTab() {
+  const res = await fetch("/api/chartink/settings");
+  const data = await res.json();
+  $("chartink-webhook-url").value = data.webhook_url;
+  renderChartinkScans(data.scans || []);
+}
+
+function renderChartinkScans(scans) {
+  const tbody = document.querySelector("#chartink-scans-table tbody");
+  tbody.innerHTML = "";
+  if (scans.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">No scans yet -- trigger an alert from Chartink and it'll show up here.</td></tr>`;
+    return;
+  }
+  scans.forEach((s) => {
+    const tr = document.createElement("tr");
+    const lastTriggered = s.last_triggered_at ? new Date(s.last_triggered_at).toLocaleString() : "-";
+    tr.innerHTML = `
+      <td>${s.scan_name || s.scan_url}</td>
+      <td>
+        <select data-field="direction" data-id="${s.id}">
+          <option value="bullish" ${s.direction === "bullish" ? "selected" : ""}>Bullish (buy)</option>
+          <option value="bearish" ${s.direction === "bearish" ? "selected" : ""}>Bearish (sell)</option>
+        </select>
+      </td>
+      <td><input type="checkbox" data-field="enabled" data-id="${s.id}" ${s.enabled ? "checked" : ""} style="width:auto" /></td>
+      <td><input type="checkbox" data-field="paper_trade_enabled" data-id="${s.id}" ${s.paper_trade_enabled ? "checked" : ""} style="width:auto" /></td>
+      <td><input type="number" data-field="paper_trade_min_score" data-id="${s.id}" value="${s.paper_trade_min_score}" min="0" max="100" step="1" style="width:64px" /></td>
+      <td style="color:var(--muted);font-size:12px">${lastTriggered}</td>
+      <td><span class="save-status" id="chartink-scan-status-${s.id}"></span></td>
+    `;
+    tr.querySelectorAll("[data-field]").forEach((el) => {
+      el.onchange = () => saveChartinkScan(s.id, el);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+async function saveChartinkScan(scanId, el) {
+  const field = el.dataset.field;
+  const value = el.type === "checkbox" ? el.checked : el.type === "number" ? Number(el.value) : el.value;
+  const statusEl = $(`chartink-scan-status-${scanId}`);
+  try {
+    const res = await fetch(`/api/chartink/scans/${scanId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: value }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Save failed");
+    }
+    if (statusEl) {
+      statusEl.textContent = "Saved";
+      setTimeout(() => (statusEl.textContent = ""), 1500);
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "Error: " + e.message;
+  }
+}
+
+$("btn-copy-chartink-url").onclick = async () => {
+  const statusEl = $("chartink-url-status");
+  try {
+    await navigator.clipboard.writeText($("chartink-webhook-url").value);
+    statusEl.textContent = "Copied to clipboard.";
+  } catch (e) {
+    statusEl.textContent = "Couldn't copy automatically -- select and copy the URL manually.";
+  }
+};
+
+$("btn-regen-chartink-token").onclick = async () => {
+  if (!confirm("Regenerating invalidates the current webhook URL -- any Chartink alerts still pointing at the old one will stop working until you update them there too. Continue?")) return;
+  const res = await fetch("/api/chartink/regenerate-token", { method: "POST" });
+  const data = await res.json();
+  $("chartink-webhook-url").value = data.webhook_url;
+  $("chartink-url-status").textContent = "New URL generated -- update it in your Chartink alerts.";
+};
+
 // ---- Stats ----
 async function loadStats() {
   const res = await fetch("/api/stats/reliability");
@@ -1348,7 +1430,7 @@ async function loadStats() {
 }
 
 function sourceLabel(source) {
-  return { scanner: "F&O Scanner", telegram: "Telegram", manual: "Manual" }[source] || source;
+  return { scanner: "F&O Scanner", telegram: "Telegram", manual: "Manual", chartink: "Chartink" }[source] || source;
 }
 
 function formatPnl(v) {

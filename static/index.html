@@ -94,6 +94,10 @@
           <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
           Telegram
         </button>
+        <button id="tab-chartink" class="nav-item">
+          <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg></span>
+          Chartink
+        </button>
         <button id="tab-positions" class="nav-item">
           <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
           Positions
@@ -473,6 +477,7 @@ Target 16/18/20/24/30+"></textarea>
               <option value="manual">Manual</option>
               <option value="telegram">Telegram</option>
               <option value="scanner">F&amp;O Scanner</option>
+              <option value="chartink">Chartink</option>
             </select>
           </label>
           <label style="font-size:12px;color:var(--muted)">Type
@@ -717,6 +722,38 @@ Target 16/18/20/24/30+"></textarea>
           <button class="secondary" id="btn-send-alert-test">Send test alert</button>
           <span id="alert-settings-status" style="color:var(--muted);font-size:12px"></span>
         </div>
+      </div>
+    </section>
+
+    <!-- CHARTINK TAB -->
+    <section id="view-chartink" class="hidden">
+      <div class="panel">
+        <h2>Webhook URL</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:10px">
+          On <a href="https://chartink.com" target="_blank" rel="noopener" style="color:var(--blue)">chartink.com</a>,
+          open your scan &rarr; <strong>Create/Modify Alert</strong> &rarr; set Alert Type to <strong>Webhook</strong> &rarr;
+          paste the URL below. Requires a Chartink premium plan. Each scan that fires shows up below the first
+          time it triggers -- give it a direction (bullish/bearish, Chartink itself doesn't say which) and it'll
+          start flowing into your Signal History like any other source.
+        </div>
+        <div class="row">
+          <input id="chartink-webhook-url" readonly style="flex:1;font-family:monospace;font-size:12px" />
+          <button class="secondary" id="btn-copy-chartink-url">Copy</button>
+          <button class="secondary" id="btn-regen-chartink-token">Regenerate</button>
+        </div>
+        <div class="warnings" id="chartink-url-status"></div>
+      </div>
+
+      <div class="panel">
+        <div class="channels-header">
+          <h2 style="margin:0">Scans</h2>
+        </div>
+        <table id="chartink-scans-table" style="margin-top:14px">
+          <thead>
+            <tr><th>Scan</th><th>Direction</th><th>Enabled</th><th>Paper-trade</th><th>Min score</th><th>Last triggered</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 

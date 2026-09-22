@@ -12,6 +12,7 @@ from typing import Optional, List
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
 from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
 from app import fo_universe, scanner, telegram_broadcast, alerts, strategies as strategies_mod, backtest as backtest_mod
+from app import chartink
 from app.brokers import kite as kite_broker, upstox as upstox_broker, dhan as dhan_broker
 from app.trademind.schema import init_tm_schema
 from app.trademind.routes import router as trademind_router
@@ -449,6 +450,70 @@ def telegram_toggle_channel(channel_id: int, req: ChannelToggleRequest, user_id:
     ok = db.set_channel_enabled(user_id, channel_id, req.enabled)
     if not ok:
         raise HTTPException(status_code=404, detail="Channel not found")
+    return {"ok": True}
+
+
+# ---- Chartink ----
+
+class ChartinkWebhookPayload(BaseModel):
+    stocks: str = ""
+    trigger_prices: Optional[str] = None
+    triggered_at: Optional[str] = None
+    scan_name: Optional[str] = None
+    scan_url: Optional[str] = None
+    alert_name: Optional[str] = None
+
+
+@app.post("/api/chartink/webhook/{token}")
+def chartink_webhook(token: str, payload: ChartinkWebhookPayload):
+    # Public endpoint by necessity -- Chartink can't send our session cookie or a custom auth
+    # header, so the token embedded in the URL itself is the only credential. Never raise a
+    # 500 for a per-symbol processing failure (network hiccup, unresolvable symbol, etc.) --
+    # Chartink has no meaningful retry/backoff UI, so a hard failure just silently loses that
+    # alert. Only a bad/revoked token is worth a non-200.
+    try:
+        return chartink.process_webhook(token, payload.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/chartink/settings")
+def chartink_settings(request: Request, user_id: int = Depends(current_user_id)):
+    token = db.get_or_create_chartink_token(user_id)
+    origin = f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
+    return {"webhook_url": f"{origin}/api/chartink/webhook/{token}", "scans": db.list_chartink_scans(user_id)}
+
+
+@app.post("/api/chartink/regenerate-token")
+def chartink_regenerate_token(request: Request, user_id: int = Depends(current_user_id)):
+    token = db.regenerate_chartink_token(user_id)
+    origin = f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
+    return {"webhook_url": f"{origin}/api/chartink/webhook/{token}"}
+
+
+class ChartinkScanUpdateRequest(BaseModel):
+    direction: Optional[str] = None
+    enabled: Optional[bool] = None
+    paper_trade_enabled: Optional[bool] = None
+    paper_trade_min_score: Optional[float] = None
+
+
+@app.post("/api/chartink/scans/{scan_id}")
+def chartink_update_scan(scan_id: int, req: ChartinkScanUpdateRequest, user_id: int = Depends(current_user_id)):
+    if req.direction is not None and req.direction not in ("bullish", "bearish"):
+        raise HTTPException(status_code=400, detail="direction must be 'bullish' or 'bearish'.")
+    if req.paper_trade_min_score is not None and not (0 <= req.paper_trade_min_score <= 100):
+        raise HTTPException(status_code=400, detail="paper_trade_min_score must be between 0 and 100.")
+    ok = db.update_chartink_scan(
+        user_id,
+        scan_id,
+        direction=req.direction,
+        enabled=req.enabled,
+        paper_trade_enabled=req.paper_trade_enabled,
+        paper_trade_min_score=req.paper_trade_min_score,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Scan not found")
     return {"ok": True}
 
 
