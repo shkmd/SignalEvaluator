@@ -7,6 +7,7 @@ Live mode requires a connected broker account AND a broker-specific order-placem
 (see app/brokers/). Until one is implemented for your broker, live orders are refused rather
 than silently doing nothing -- see place_live_order() below.
 """
+import math
 from concurrent.futures import ThreadPoolExecutor
 
 import yfinance as yf
@@ -221,24 +222,19 @@ def place_order_for_channel(
 
 
 def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dict, settings: dict) -> dict:
-    """Places a REAL market order on the user's connected Zerodha account. Deliberately
-    scoped to equity signals only -- an options signal needs a contract-selection stage
-    (expiry, strike, liquidity checks) that doesn't exist yet, so it's refused with a clear
-    reason rather than guessing a strike.
+    """Places a REAL market order on the user's connected broker account -- equity directly,
+    or (see _place_option_order) an options contract resolved fresh at order time, since a
+    signal's strike/expiry can go stale between when it was scored and when this actually
+    fires.
 
     Only places the entry order. SL/target are recorded on the order row for the user to
-    manage -- automatic bracket-style exit via Kite (GTT orders) isn't wired up yet, unlike
-    paper mode where monitor_open_positions() auto-closes on SL/target hit.
+    manage -- automatic bracket-style exit isn't wired up yet, unlike paper mode where
+    monitor_open_positions() auto-closes on SL/target hit. For a live position,
+    monitor_open_positions() only sends an SL-proximity alert; closing it (manually, from
+    Positions) is what places the real offsetting order -- see close_order().
     """
     if signal_id and db.order_exists_for_signal(user_id, signal_id):
         return {"placed": False, "reason": "An order already exists for this signal."}
-
-    if signal.get("instrument") in ("CE", "PE"):
-        return {
-            "placed": False,
-            "reason": "Live execution is equity-only for now -- an options signal needs a "
-            "separate contract-selection stage (expiry/strike/liquidity) that isn't built yet.",
-        }
 
     from app.brokers import get_connected_adapter
 
@@ -260,19 +256,34 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
 
     resolved_symbol = signal["resolved_symbol"]
     side = _order_side(signal, evaluation).upper()
-    quantity = int(size_for_reliability(user_id, signal_id, settings["quantity"]))
-
-    try:
-        broker_order_id, broker_name = _place_equity_order(broker, user_id, resolved_symbol, side, quantity)
-    except Exception as e:
-        return {"placed": False, "reason": f"{_broker_name(broker)} order placement failed: {e}"}
-
-    try:
-        entry_price = broker.fetch_ltp(user_id, resolved_symbol, "NSE")
-    except Exception:
-        entry_price = signal.get("entry_high") or signal.get("entry_low")
-
+    base_quantity = size_for_reliability(user_id, signal_id, settings["quantity"])
+    instrument = signal.get("instrument", "EQ")
     targets = signal.get("targets") or []
+
+    if instrument in ("CE", "PE"):
+        strike = signal.get("strike")
+        if not strike:
+            return {"placed": False, "reason": "Signal has no strike recorded -- can't place a live options order."}
+        try:
+            broker_order_id, broker_name, contract, quantity = _place_option_order(
+                broker, user_id, resolved_symbol, strike, instrument, side, int(base_quantity)
+            )
+        except Exception as e:
+            return {"placed": False, "reason": f"{_broker_name(broker)} options order placement failed: {e}"}
+        entry_price = contract.get("ltp") or signal.get("entry_high") or signal.get("entry_low")
+        order_strike = contract.get("strike", strike)
+    else:
+        quantity = int(base_quantity)
+        try:
+            broker_order_id, broker_name = _place_equity_order(broker, user_id, resolved_symbol, side, quantity)
+        except Exception as e:
+            return {"placed": False, "reason": f"{_broker_name(broker)} order placement failed: {e}"}
+        try:
+            entry_price = broker.fetch_ltp(user_id, resolved_symbol, "NSE")
+        except Exception:
+            entry_price = signal.get("entry_high") or signal.get("entry_low")
+        order_strike = None
+
     order_id = db.insert_order(
         user_id,
         {
@@ -280,8 +291,8 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
             "mode": "live",
             "symbol": signal.get("symbol"),
             "resolved_symbol": resolved_symbol,
-            "instrument": "EQ",
-            "strike": None,
+            "instrument": instrument,
+            "strike": order_strike,
             "side": side.lower(),
             "quantity": quantity,
             "entry_price": entry_price,
@@ -327,6 +338,52 @@ def _place_equity_order(broker, user_id: int, resolved_symbol: str, side: str, q
     raise RuntimeError(f"No order-placement wiring for broker '{name}'.")
 
 
+def _place_option_order(broker, user_id: int, name: str, strike: float, instrument: str, side: str, quantity: int):
+    """Resolves the exact option contract fresh via the broker's own instrument list -- never
+    trusts a signal's strike/expiry as still the right contract by the time this actually
+    fires -- then places a REAL order on it. `quantity` is rounded UP to at least one full lot
+    using the broker's own lot size, since NSE options can only trade in exact lot multiples
+    and a real order for a non-lot quantity would be rejected (or worse, misinterpreted) by the
+    broker. Returns (broker_order_id, broker_name, resolved_contract, final_quantity)."""
+    name_only = name.split(".")[0]  # tolerate a ".NS"-style suffix if the caller passed one
+    contract = broker.find_option_by_strike(user_id, name_only, strike, instrument)
+    if not contract.get("available"):
+        raise RuntimeError(contract.get("reason", "Could not resolve the option contract."))
+    if not contract.get("ltp"):
+        raise RuntimeError(
+            f"No live quote for {contract.get('tradingsymbol', name_only)} -- refusing to place a live order blind."
+        )
+
+    # `quantity` here is a share-count target, same meaning it has for equity -- round UP to
+    # the nearest whole lot rather than to the nearest, so a small configured quantity (e.g. 1)
+    # never gets rounded away to less exposure than requested, and never gets silently rejected
+    # by the broker for not being a lot multiple.
+    lot_size = contract.get("lot_size") or 1
+    lots = max(1, math.ceil(quantity / lot_size))
+    final_quantity = lots * lot_size
+
+    broker_name = _broker_name(broker)
+    if broker_name == "kite":
+        order_id = broker.place_order(
+            user_id, tradingsymbol=contract["tradingsymbol"], exchange="NFO",
+            transaction_type=side, quantity=final_quantity, product="MIS", order_type="MARKET",
+        )
+    elif broker_name == "upstox":
+        order_id = broker.place_order(
+            user_id, contract["instrument_key"], transaction_type=side, quantity=final_quantity,
+            product="I", order_type="MARKET",
+        )
+    elif broker_name == "dhan":
+        order_id = broker.place_order(
+            user_id, contract["security_id"], "NSE_FNO", transaction_type=side,
+            quantity=final_quantity, product_type="INTRADAY", order_type="MARKET",
+        )
+    else:
+        raise RuntimeError(f"No options order-placement wiring for broker '{broker_name}'.")
+
+    return order_id, broker_name, contract, final_quantity
+
+
 def close_order(user_id: int, order_id: int, reason: str = "manual_close") -> dict:
     """Closes an open position. For a live order this places a REAL offsetting order on
     Kite first (e.g. SELL to close a BUY) -- it never just marks the DB row closed while
@@ -358,14 +415,22 @@ def _close_live_order(user_id: int, order: dict, reason: str) -> dict:
 
     offsetting_side = "SELL" if order["side"] == "buy" else "BUY"
     try:
-        _place_equity_order(broker, user_id, order["resolved_symbol"], offsetting_side, int(order["quantity"]))
+        if order["instrument"] in ("CE", "PE"):
+            # Same strike the position was actually opened at, at the nearest upcoming expiry
+            # -- never re-pick ATM, that could resolve to a completely different contract.
+            _, _, contract, _ = _place_option_order(
+                broker, user_id, order["resolved_symbol"], order["strike"], order["instrument"],
+                offsetting_side, int(order["quantity"]),
+            )
+            exit_price = contract.get("ltp") or order["entry_price"]
+        else:
+            _place_equity_order(broker, user_id, order["resolved_symbol"], offsetting_side, int(order["quantity"]))
+            try:
+                exit_price = broker.fetch_ltp(user_id, order["resolved_symbol"], "NSE")
+            except Exception:
+                exit_price = order["entry_price"]
     except Exception as e:
         return {"closed": False, "reason": f"{_broker_name(broker)} offsetting order failed: {e} -- your real position is still open."}
-
-    try:
-        exit_price = broker.fetch_ltp(user_id, order["resolved_symbol"], "NSE")
-    except Exception:
-        exit_price = order["entry_price"]
 
     pnl = _calc_pnl(order, exit_price)
     db.close_order(order["id"], exit_price, reason, pnl)

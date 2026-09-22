@@ -1940,7 +1940,7 @@ async function loadAutoTradeSettings() {
 function updateLiveWarning() {
   const warnEl = $("at-live-warning");
   if ($("at-mode").value === "live") {
-    warnEl.innerHTML = `<div>⚠ Live mode places REAL orders on your connected Zerodha account with REAL money when a signal clears your score threshold -- no per-trade confirmation. Make sure Kite Connect below shows "logged in today" first, and that you've paper-traded this setup enough to trust it. If Kite isn't connected, live signals are logged as "not placed" with a reason, never silently skipped.</div>`;
+    warnEl.innerHTML = `<div>⚠ Live mode places REAL orders on your connected broker account with REAL money when a signal clears your score threshold -- no per-trade confirmation, equity or options both. Options quantity is rounded up to a full lot using your broker's own lot size. There's no automatic exit yet -- SL/target only send you a Telegram alert, and you close the position yourself from the Positions tab (which places a real offsetting order). Make sure your broker below shows "logged in today" first, and that you've paper-traded this setup enough to trust it. If no broker is connected, live signals are logged as "not placed" with a reason, never silently skipped.</div>`;
   } else {
     warnEl.innerHTML = "";
   }

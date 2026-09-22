@@ -324,6 +324,8 @@ def find_option_by_strike(user_id: int, name: str, strike: float, instrument: st
         "expiry": pd.Timestamp(nearest_expiry, unit="ms").date().isoformat(),
         "strike": float(closest["strike_price"]),
         "ltp": quote.get("last_price"),
+        "lot_size": int(closest["lot_size"]),
+        "instrument_key": instrument_key,
     }
 
 
