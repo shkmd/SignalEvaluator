@@ -10,7 +10,11 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <div class="auth-gate" id="auth-gate">
+  <div id="boot-loading" style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:'DM Sans',sans-serif;color:var(--muted,#888)">
+    Loading&hellip;
+  </div>
+
+  <div class="auth-gate hidden" id="auth-gate">
     <div class="auth-card">
       <div class="brand" style="border-bottom:none;margin-bottom:16px;padding-bottom:0">
         <div class="brand-icon">⚡</div>

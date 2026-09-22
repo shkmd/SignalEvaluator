@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---- Auth ----
 function showAuthGate() {
+  $("boot-loading").classList.add("hidden");
   $("auth-gate").classList.remove("hidden");
   $("app-shell").classList.add("hidden");
   if (_positionsPollTimer) {
@@ -11,6 +12,7 @@ function showAuthGate() {
 }
 
 function showApp(user) {
+  $("boot-loading").classList.add("hidden");
   $("auth-gate").classList.add("hidden");
   $("app-shell").classList.remove("hidden");
   $("sidebar-user-email").textContent = user.email;
