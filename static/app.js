@@ -1672,6 +1672,7 @@ async function loadOrderBook() {
   renderOrderbookSummaryTiles(allRows);
 
   const rows = allRows.filter((o) => matchesCategory(o.instrument, _orderbookFilter));
+  _lastOrderbookRows = rows;
   const tbody = document.querySelector("#orderbook-table tbody");
   tbody.innerHTML = "";
   if (rows.length === 0) {
@@ -1725,6 +1726,55 @@ $("btn-reset-orderbook-dates").onclick = (e) => {
   $("ob-filter-date-from").value = "";
   $("ob-filter-date-to").value = "";
   loadOrderBook();
+};
+
+function csvEscape(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+$("btn-export-orderbook-csv").onclick = () => {
+  const rows = _lastOrderbookRows;
+  const headers = [
+    "ID", "Date", "Symbol", "Instrument", "Strike", "Mode", "Side", "Quantity",
+    "Entry Price", "Exit Price", "P&L", "Status", "Closed At", "Broker",
+  ];
+  const lines = [headers.join(",")];
+  rows.forEach((o) => {
+    lines.push(
+      [
+        o.id,
+        (o.created_at || "").slice(0, 16).replace("T", " "),
+        o.resolved_symbol || o.symbol,
+        o.instrument,
+        o.strike ?? "",
+        o.mode,
+        o.side,
+        o.quantity,
+        o.entry_price ?? "",
+        o.exit_price ?? "",
+        o.pnl ?? "",
+        o.status,
+        (o.closed_at || "").slice(0, 16).replace("T", " "),
+        o.broker ?? "",
+      ]
+        .map(csvEscape)
+        .join(",")
+    );
+  });
+
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const dateFrom = $("ob-filter-date-from").value;
+  const dateTo = $("ob-filter-date-to").value;
+  const suffix = dateFrom || dateTo ? `_${dateFrom || "start"}_to_${dateTo || "now"}` : "";
+  a.href = url;
+  a.download = `order-book${suffix}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 };
 
 // ---- Broker Setup ----
@@ -2554,6 +2604,7 @@ document.querySelectorAll("#view-positions .filter-tab").forEach((btn) => {
 });
 
 let _orderbookFilter = "ALL";
+let _lastOrderbookRows = [];
 document.querySelectorAll("#view-orderbook .filter-tab").forEach((btn) => {
   btn.onclick = () => {
     document.querySelectorAll("#view-orderbook .filter-tab").forEach((b) => b.classList.remove("active"));
