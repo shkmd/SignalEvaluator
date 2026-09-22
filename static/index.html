@@ -478,6 +478,7 @@ Target 16/18/20/24/30+"></textarea>
               <option value="telegram">Telegram</option>
               <option value="scanner">F&amp;O Scanner</option>
               <option value="chartink">Chartink</option>
+              <option value="confluence">Confluence</option>
             </select>
           </label>
           <label style="font-size:12px;color:var(--muted)">Type
@@ -754,6 +755,32 @@ Target 16/18/20/24/30+"></textarea>
           </thead>
           <tbody></tbody>
         </table>
+      </div>
+
+      <div class="panel">
+        <h2>Confluence Auto-Trade</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
+          Only takes a paper position when the F&amp;O Scanner and a Chartink scan <strong>both</strong>
+          flag the same symbol in the same direction within the window below -- two independent sources
+          agreeing is a stronger signal than either alone. The order is always placed using the Scanner's
+          own signal (real ATM option contract); Chartink's signal here is just the confirming filter.
+          Ignored otherwise. Always paper, separate from the F&amp;O Scanner's and each Chartink scan's own
+          paper-trade toggles.
+        </div>
+        <div class="row">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="chk-confluence-enabled" style="width:auto" />
+            Enable confluence auto-trade
+          </label>
+          <label style="font-size:12px;color:var(--muted)">Match window (minutes)
+            <input id="inp-confluence-window" type="number" min="1" max="1440" step="1" style="width:72px" />
+          </label>
+          <label style="font-size:12px;color:var(--muted)">Quantity
+            <input id="inp-confluence-quantity" type="number" min="0.01" step="1" style="width:72px" />
+          </label>
+          <button class="primary" id="btn-save-confluence-settings">Save</button>
+          <span id="confluence-settings-status" style="color:var(--muted);font-size:12px"></span>
+        </div>
       </div>
     </section>
 

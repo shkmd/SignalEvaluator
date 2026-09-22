@@ -331,6 +331,19 @@ CREATE TABLE IF NOT EXISTS chartink_scans (
     FOREIGN KEY (user_id) REFERENCES users(id),
     UNIQUE(user_id, scan_url)
 );
+
+-- Confluence auto-trade: only takes a position when the F&O Scanner and a Chartink scan both
+-- independently flag the same symbol + direction within window_minutes of each other. Always
+-- paper (see app/confluence.py) -- like the other per-source auto-trade toggles, it exists to
+-- measure this specific strategy's own reliability via Channel Stats before anyone would trust
+-- it with real money.
+CREATE TABLE IF NOT EXISTS confluence_settings (
+    user_id INTEGER PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    window_minutes INTEGER NOT NULL DEFAULT 30,
+    quantity REAL NOT NULL DEFAULT 1,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 """
 
 
@@ -904,6 +917,57 @@ def update_chartink_scan(
         )
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---- Confluence auto-trade (per user) ----
+
+def get_confluence_settings(user_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM confluence_settings WHERE user_id = ?", (user_id,)).fetchone()
+        if not row:
+            return {"user_id": user_id, "enabled": False, "window_minutes": 30, "quantity": 1}
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def save_confluence_settings(user_id: int, enabled: bool, window_minutes: int, quantity: float) -> dict:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO confluence_settings (user_id, enabled, window_minutes, quantity)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                window_minutes = excluded.window_minutes,
+                quantity = excluded.quantity
+            """,
+            (user_id, 1 if enabled else 0, window_minutes, quantity),
+        )
+        conn.commit()
+        return get_confluence_settings(user_id)
+    finally:
+        conn.close()
+
+
+def find_recent_signal(user_id: int, resolved_symbol: str, direction: str, source: str, since_iso: str) -> dict:
+    """Most recent signal from `source` for this exact symbol+direction, no older than
+    since_iso -- the other half of a confluence match (see app/confluence.py)."""
+    conn = _conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT * FROM signals
+            WHERE user_id = ? AND resolved_symbol = ? AND direction = ? AND source = ? AND created_at >= ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (user_id, resolved_symbol, direction, source, since_iso),
+        ).fetchone()
+        return _row_to_dict(row) if row else None
     finally:
         conn.close()
 

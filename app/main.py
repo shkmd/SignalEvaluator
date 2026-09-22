@@ -517,6 +517,26 @@ def chartink_update_scan(scan_id: int, req: ChartinkScanUpdateRequest, user_id: 
     return {"ok": True}
 
 
+class ConfluenceSettingsRequest(BaseModel):
+    enabled: bool
+    window_minutes: int
+    quantity: float
+
+
+@app.get("/api/confluence/settings")
+def get_confluence_settings(user_id: int = Depends(current_user_id)):
+    return db.get_confluence_settings(user_id)
+
+
+@app.post("/api/confluence/settings")
+def save_confluence_settings(req: ConfluenceSettingsRequest, user_id: int = Depends(current_user_id)):
+    if not (1 <= req.window_minutes <= 1440):
+        raise HTTPException(status_code=400, detail="window_minutes must be between 1 and 1440.")
+    if req.quantity <= 0:
+        raise HTTPException(status_code=400, detail="quantity must be greater than 0.")
+    return db.save_confluence_settings(user_id, req.enabled, req.window_minutes, req.quantity)
+
+
 class AutoTradeSettingsRequest(BaseModel):
     enabled: Optional[bool] = None
     mode: Optional[str] = None

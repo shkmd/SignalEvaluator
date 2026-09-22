@@ -14,7 +14,7 @@ an F&O Scanner snapshot does, but 14-day ATR is fetched anyway as part of scorin
 """
 from datetime import datetime, timezone
 
-from app import db, scoring, trading, telegram_broadcast, alerts
+from app import db, scoring, trading, telegram_broadcast, alerts, confluence
 from app import technicals, news as news_mod, screener, stock_score
 
 MIN_RISK_PCT = 0.005  # floor so a near-zero ATR (illiquid/newly-listed stock) never yields ~zero risk
@@ -120,6 +120,7 @@ def _generate_one(user_id: int, scan: dict, symbol: str, trigger_price: float, b
         _maybe_paper_trade(user_id, signal_id, signal, evaluation, scan)
         telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
         alerts.maybe_alert_signal(user_id, signal, evaluation, signal_id)
+        confluence.check_and_trade(user_id, signal_id)
     return signal_id
 
 

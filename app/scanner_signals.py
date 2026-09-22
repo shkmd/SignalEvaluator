@@ -13,7 +13,7 @@ Only fires for a genuine transition into CE_QUALIFIED/PE_QUALIFIED (the stock wa
 qualified for that direction in the previous scan), so one continuous qualification period
 produces one signal, not one every scan.
 """
-from app import db, scoring, trading, telegram_broadcast, alerts
+from app import db, scoring, trading, telegram_broadcast, alerts, confluence
 from app import technicals, options as options_mod, news as news_mod, screener, stock_score
 
 MIN_RISK_PCT = 0.005  # floor so a same-day close==low (or close==high) never yields zero risk
@@ -158,6 +158,7 @@ def _generate_one(user_id: int, result: dict, classification: str) -> int:
         _maybe_paper_trade(user_id, signal_id, signal, evaluation)
         telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
         alerts.maybe_alert_signal(user_id, signal, evaluation, signal_id)
+        confluence.check_and_trade(user_id, signal_id)
     return signal_id
 
 

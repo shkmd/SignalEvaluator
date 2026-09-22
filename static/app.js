@@ -679,7 +679,7 @@ function renderSignalRows(rows, tableSelector) {
     const { lot, maxProfit, maxLoss } = computeMaxPL(s);
     tr.innerHTML = `
       <td>${s.id}</td>
-      <td>${s.source === "telegram" ? "📡" : s.source === "scanner" ? "🔍" : s.source === "chartink" ? "📈" : "✍️"}</td>
+      <td>${s.source === "telegram" ? "📡" : s.source === "scanner" ? "🔍" : s.source === "chartink" ? "📈" : s.source === "confluence" ? "🤝" : "✍️"}</td>
       <td>${s.channel}</td>
       <td>${s.resolved_symbol || s.symbol}${s.instrument !== "EQ" ? " " + s.strike + s.instrument : ""}</td>
       <td>${s.signal_type}</td>
@@ -1327,7 +1327,35 @@ async function loadChartinkTab() {
   const data = await res.json();
   $("chartink-webhook-url").value = data.webhook_url;
   renderChartinkScans(data.scans || []);
+
+  const confRes = await fetch("/api/confluence/settings");
+  const conf = await confRes.json();
+  $("chk-confluence-enabled").checked = !!conf.enabled;
+  $("inp-confluence-window").value = conf.window_minutes;
+  $("inp-confluence-quantity").value = conf.quantity;
 }
+
+$("btn-save-confluence-settings").onclick = async () => {
+  const statusEl = $("confluence-settings-status");
+  try {
+    const res = await fetch("/api/confluence/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: $("chk-confluence-enabled").checked,
+        window_minutes: Number($("inp-confluence-window").value),
+        quantity: Number($("inp-confluence-quantity").value),
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Save failed");
+    }
+    statusEl.textContent = "Saved.";
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+};
 
 function renderChartinkScans(scans) {
   const tbody = document.querySelector("#chartink-scans-table tbody");
@@ -1430,7 +1458,13 @@ async function loadStats() {
 }
 
 function sourceLabel(source) {
-  return { scanner: "F&O Scanner", telegram: "Telegram", manual: "Manual", chartink: "Chartink" }[source] || source;
+  return {
+    scanner: "F&O Scanner",
+    telegram: "Telegram",
+    manual: "Manual",
+    chartink: "Chartink",
+    confluence: "Confluence",
+  }[source] || source;
 }
 
 function formatPnl(v) {
