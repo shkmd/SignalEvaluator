@@ -2,9 +2,23 @@ import json
 import secrets
 import sqlite3
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "signals.db"
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def _ist_date_to_utc_bounds(date_str: str) -> tuple:
+    """'YYYY-MM-DD' (an IST calendar date, e.g. a trading day) -> (utc_start_iso, utc_end_iso)
+    spanning that whole day in IST, converted to UTC -- created_at is stored as a UTC ISO
+    timestamp, so a plain string date wouldn't line up with the trading day traders actually
+    mean (IST midnight-to-midnight), especially near either end of the day."""
+    day_start_ist = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=IST)
+    start_utc = day_start_ist.astimezone(timezone.utc)
+    end_utc = (day_start_ist + timedelta(days=1)).astimezone(timezone.utc)
+    return start_utc.isoformat(), end_utc.isoformat()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -671,6 +685,8 @@ def list_signals(
     outcome: str = None,
     source: str = None,
     signal_type: str = None,
+    date_from: str = None,
+    date_to: str = None,
     limit: int = 200,
 ) -> list:
     conn = _conn()
@@ -689,6 +705,14 @@ def list_signals(
         if signal_type:
             query += " AND signal_type = ?"
             params.append(signal_type)
+        if date_from:
+            start_iso, _ = _ist_date_to_utc_bounds(date_from)
+            query += " AND created_at >= ?"
+            params.append(start_iso)
+        if date_to:
+            _, end_iso = _ist_date_to_utc_bounds(date_to)
+            query += " AND created_at < ?"
+            params.append(end_iso)
         query += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
         rows = conn.execute(query, params).fetchall()
@@ -1271,7 +1295,9 @@ def insert_order(user_id: int, order: dict) -> int:
         conn.close()
 
 
-def list_orders(user_id: int, status: str = None, mode: str = None, limit: int = 200) -> list:
+def list_orders(
+    user_id: int, status: str = None, mode: str = None, date_from: str = None, date_to: str = None, limit: int = 200
+) -> list:
     conn = _conn()
     try:
         query = "SELECT * FROM orders WHERE user_id = ?"
@@ -1282,6 +1308,14 @@ def list_orders(user_id: int, status: str = None, mode: str = None, limit: int =
         if mode:
             query += " AND mode = ?"
             params.append(mode)
+        if date_from:
+            start_iso, _ = _ist_date_to_utc_bounds(date_from)
+            query += " AND created_at >= ?"
+            params.append(start_iso)
+        if date_to:
+            _, end_iso = _ist_date_to_utc_bounds(date_to)
+            query += " AND created_at < ?"
+            params.append(end_iso)
         query += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
         rows = conn.execute(query, params).fetchall()

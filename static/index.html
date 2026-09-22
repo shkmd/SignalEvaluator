@@ -152,12 +152,12 @@
 
       <div class="panel">
         <div class="channels-header">
-          <h2 style="margin:0">Recent Signals</h2>
+          <h2 style="margin:0">Recent Signals (Today)</h2>
           <a href="#" id="dashboard-view-all" class="close-link">View all in History</a>
         </div>
         <table id="dashboard-signals-table" style="margin-top:14px">
           <thead>
-            <tr><th>ID</th><th>Src</th><th>Channel</th><th>Symbol</th><th>Type</th><th>Buy</th><th>SL</th><th>Target</th><th>Lot</th><th>Max Profit</th><th>Max Loss</th><th>Score</th><th>Verdict</th><th>Outcome</th></tr>
+            <tr><th>ID</th><th>Src</th><th>Channel</th><th>Date</th><th>Symbol</th><th>Type</th><th>Buy</th><th>SL</th><th>Target</th><th>Lot</th><th>Max Profit</th><th>Max Loss</th><th>Score</th><th>Verdict</th><th>Outcome</th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -508,10 +508,16 @@ Target 16/18/20/24/30+"></textarea>
               <option value="partial">Partial</option>
             </select>
           </label>
+          <label style="font-size:12px;color:var(--muted)">From
+            <input id="hist-filter-date-from" type="date" style="display:block;margin-top:4px" />
+          </label>
+          <label style="font-size:12px;color:var(--muted)">To
+            <input id="hist-filter-date-to" type="date" style="display:block;margin-top:4px" />
+          </label>
         </div>
         <table id="history-table">
           <thead>
-            <tr><th>ID</th><th>Src</th><th>Channel</th><th>Symbol</th><th>Type</th><th>Buy</th><th>SL</th><th>Target</th><th>Lot</th><th>Max Profit</th><th>Max Loss</th><th>Score</th><th>Verdict</th><th>Outcome</th></tr>
+            <tr><th>ID</th><th>Src</th><th>Channel</th><th>Date</th><th>Symbol</th><th>Type</th><th>Buy</th><th>SL</th><th>Target</th><th>Lot</th><th>Max Profit</th><th>Max Loss</th><th>Score</th><th>Verdict</th><th>Outcome</th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -812,6 +818,16 @@ Target 16/18/20/24/30+"></textarea>
           <h2 style="margin:0">Order Book</h2>
           <span id="orderbook-summary" style="color:var(--muted);font-size:12px"></span>
         </div>
+        <div class="row" style="margin-top:4px">
+          <label style="font-size:12px;color:var(--muted)">From
+            <input id="ob-filter-date-from" type="date" style="display:block;margin-top:4px" />
+          </label>
+          <label style="font-size:12px;color:var(--muted)">To
+            <input id="ob-filter-date-to" type="date" style="display:block;margin-top:4px" />
+          </label>
+          <a href="#" id="btn-reset-orderbook-dates" class="close-link" style="align-self:flex-end">Reset dates</a>
+        </div>
+        <div class="summary-grid" id="orderbook-summary-grid" style="margin-top:12px"></div>
         <div class="scanner-filter-tabs" style="margin-top:12px">
           <button class="filter-tab active" data-filter="ALL">All</button>
           <button class="filter-tab" data-filter="FNO">F&amp;O</button>

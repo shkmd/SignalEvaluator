@@ -665,7 +665,7 @@ function renderSignalRows(rows, tableSelector) {
   const tbody = document.querySelector(`${tableSelector} tbody`);
   tbody.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="14" style="color:var(--muted)">No signals yet.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="15" style="color:var(--muted)">No signals yet.</td></tr>`;
     return;
   }
   rows.forEach((s) => {
@@ -677,10 +677,12 @@ function renderSignalRows(rows, tableSelector) {
     const entry = s.entry_low == null ? "-" : s.entry_low === s.entry_high ? s.entry_low : `${s.entry_low}-${s.entry_high}`;
     const targets = (s.targets || []).join("/") || "-";
     const { lot, maxProfit, maxLoss } = computeMaxPL(s);
+    const dateStr = (s.created_at || "").slice(0, 16).replace("T", " ");
     tr.innerHTML = `
       <td>${s.id}</td>
       <td>${s.source === "telegram" ? "📡" : s.source === "scanner" ? "🔍" : s.source === "chartink" ? "📈" : s.source === "confluence" ? "🤝" : "✍️"}</td>
       <td>${s.channel}</td>
+      <td style="color:var(--muted);font-size:12px">${dateStr}</td>
       <td>${s.resolved_symbol || s.symbol}${s.instrument !== "EQ" ? " " + s.strike + s.instrument : ""}</td>
       <td>${s.signal_type}</td>
       <td class="text-up">${entry}</td>
@@ -718,7 +720,10 @@ function renderSignalRows(rows, tableSelector) {
 }
 
 let _historyFiltersInitialized = false;
-const HIST_FILTER_IDS = ["hist-filter-channel", "hist-filter-source", "hist-filter-type", "hist-filter-verdict", "hist-filter-outcome"];
+const HIST_FILTER_IDS = [
+  "hist-filter-channel", "hist-filter-source", "hist-filter-type", "hist-filter-verdict",
+  "hist-filter-outcome", "hist-filter-date-from", "hist-filter-date-to",
+];
 
 async function loadHistory() {
   if (!_historyFiltersInitialized) {
@@ -737,10 +742,14 @@ async function loadHistory() {
   const source = $("hist-filter-source").value;
   const type = $("hist-filter-type").value;
   const outcome = $("hist-filter-outcome").value;
+  const dateFrom = $("hist-filter-date-from").value;
+  const dateTo = $("hist-filter-date-to").value;
   if (channel) params.set("channel", channel);
   if (source) params.set("source", source);
   if (type) params.set("signal_type", type);
   if (outcome) params.set("outcome", outcome);
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
 
   const res = await fetch(`/api/signals?${params.toString()}`);
   let rows = await res.json();
@@ -841,8 +850,16 @@ async function loadDashboardCards() {
   if (goBroker) goBroker.onclick = () => showTab("broker");
 }
 
+function istTodayStr() {
+  // en-CA formats as YYYY-MM-DD, which is exactly what the backend's date filters expect.
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+}
+
 async function loadDashboardSignals() {
-  const res = await fetch("/api/signals");
+  // Scoped to today (IST trading day) so this list naturally clears itself once a new
+  // trading day starts, instead of showing yesterday's signals until 15 new ones roll in.
+  const today = istTodayStr();
+  const res = await fetch(`/api/signals?date_from=${today}&date_to=${today}`);
   const rows = await res.json();
   renderSignalRows(rows.slice(0, 15), "#dashboard-signals-table");
 }
@@ -1642,10 +1659,17 @@ $("btn-save-risk-settings").onclick = async () => {
 
 // ---- Order book ----
 async function loadOrderBook() {
-  const res = await fetch("/api/trading/orders");
+  const params = new URLSearchParams();
+  const dateFrom = $("ob-filter-date-from").value;
+  const dateTo = $("ob-filter-date-to").value;
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
+
+  const res = await fetch(`/api/trading/orders?${params.toString()}`);
   const allRows = await res.json();
   const fnoCount = allRows.filter((o) => o.instrument === "CE" || o.instrument === "PE").length;
   $("orderbook-summary").textContent = `${allRows.length} total (${fnoCount} F&O, ${allRows.length - fnoCount} Swing)`;
+  renderOrderbookSummaryTiles(allRows);
 
   const rows = allRows.filter((o) => matchesCategory(o.instrument, _orderbookFilter));
   const tbody = document.querySelector("#orderbook-table tbody");
@@ -1673,6 +1697,35 @@ async function loadOrderBook() {
     tbody.appendChild(tr);
   });
 }
+
+function renderOrderbookSummaryTiles(rows) {
+  const investment = rows.reduce((sum, o) => sum + (o.entry_price != null ? o.entry_price * o.quantity : 0), 0);
+  const closed = rows.filter((o) => o.pnl != null);
+  const pnl = closed.reduce((sum, o) => sum + o.pnl, 0);
+  const wins = closed.filter((o) => o.pnl > 0).length;
+  const losses = closed.filter((o) => o.pnl < 0).length;
+  const winRatio = wins + losses > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : "-";
+
+  const tiles = [
+    ["Overall investment", fmtRupees(investment)],
+    ["Profit / Loss", (pnl >= 0 ? "+" : "-") + fmtRupees(Math.abs(pnl))],
+    ["Win trades", wins],
+    ["Loss trades", losses],
+    ["Win ratio", winRatio === "-" ? "-" : `${winRatio}%`],
+  ];
+  $("orderbook-summary-grid").innerHTML = tiles
+    .map(([label, value]) => `<div class="summary-tile"><div class="tile-value">${value}</div><div class="tile-label">${label}</div></div>`)
+    .join("");
+}
+
+$("ob-filter-date-from").onchange = loadOrderBook;
+$("ob-filter-date-to").onchange = loadOrderBook;
+$("btn-reset-orderbook-dates").onclick = (e) => {
+  e.preventDefault();
+  $("ob-filter-date-from").value = "";
+  $("ob-filter-date-to").value = "";
+  loadOrderBook();
+};
 
 // ---- Broker Setup ----
 const BROKERS = [{ id: "angelone", name: "Angel One (SmartAPI)" }];

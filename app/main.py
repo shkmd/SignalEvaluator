@@ -309,9 +309,14 @@ def get_signals(
     outcome: Optional[str] = None,
     source: Optional[str] = None,
     signal_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     user_id: int = Depends(current_user_id),
 ):
-    return db.list_signals(user_id, channel=channel, outcome=outcome, source=source, signal_type=signal_type)
+    return db.list_signals(
+        user_id, channel=channel, outcome=outcome, source=source, signal_type=signal_type,
+        date_from=date_from, date_to=date_to,
+    )
 
 
 @app.get("/api/signals/channels")
@@ -590,8 +595,14 @@ def get_positions(mode: Optional[str] = None, user_id: int = Depends(current_use
 
 
 @app.get("/api/trading/orders")
-def get_orders(mode: Optional[str] = None, status: Optional[str] = None, user_id: int = Depends(current_user_id)):
-    return db.list_orders(user_id, status=status, mode=mode)
+def get_orders(
+    mode: Optional[str] = None,
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user_id: int = Depends(current_user_id),
+):
+    return db.list_orders(user_id, status=status, mode=mode, date_from=date_from, date_to=date_to)
 
 
 @app.post("/api/trading/orders/{order_id}/close")
