@@ -84,16 +84,18 @@ h1, h2, h3, .brand-name, .page-title, .metric, .stat-value, .tile-value,
 
 .main-area { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
+.topbar-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); background: #0e0e15; }
 .ticker-bar {
   display: flex;
   align-items: center;
   gap: 26px;
   padding: 12px 28px;
-  border-bottom: 1px solid var(--border);
   background: #0e0e15;
   font-size: 13px;
   overflow-x: auto;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 .ticker-item { display: flex; align-items: baseline; gap: 9px; }
 .ticker-label { color: var(--muted-2); font-weight: 500; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
@@ -102,6 +104,24 @@ h1, h2, h3, .brand-name, .page-title, .metric, .stat-value, .tile-value,
 .ticker-change.up { color: var(--green); }
 .ticker-change.down { color: var(--red); }
 .ticker-clock { margin-left: auto; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+
+/* PWAs (standalone display mode) have no address bar and no reliable pull-to-refresh across
+   platforms -- this is the only universal way to force a reload once installed. */
+.refresh-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
+  width: 48px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.refresh-btn:hover { color: var(--text); background: var(--panel-2); }
+.refresh-btn svg { transition: transform .3s; }
+.refresh-btn:active svg { transform: rotate(180deg); }
 
 .page-title { font-size: 30px; font-weight: 600; letter-spacing: -.6px; margin: 0 0 22px; }
 

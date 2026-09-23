@@ -190,6 +190,11 @@ function closeMobileNav() {
 $("btn-mobile-menu").onclick = openMobileNav;
 _sidebarBackdrop.onclick = closeMobileNav;
 
+// Installed PWAs have no address bar and pull-to-refresh isn't reliable across platforms
+// (absent entirely on desktop, inconsistent on Android, nonexistent on iOS standalone) --
+// this is the one refresh control guaranteed to work everywhere.
+$("btn-refresh-app").onclick = () => window.location.reload();
+
 // ---- Market ticker ----
 async function refreshTicker() {
   const bar = $("ticker-bar");
