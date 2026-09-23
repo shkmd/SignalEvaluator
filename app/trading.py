@@ -178,6 +178,15 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
     entry_price = price_info["price"] if price_info["available"] else (signal.get("entry_high") or signal.get("entry_low"))
     quantity = size_for_reliability(user_id, signal_id, settings["quantity"])
 
+    if instrument in ("CE", "PE"):
+        # Same reasoning as _place_option_order()'s live-order rounding: NSE options only
+        # trade in whole lots, so a paper position sized in raw "shares" (e.g. the general
+        # Auto-Trade toggle's "Quantity per trade" taken literally) doesn't reflect a real,
+        # tradable position and makes its P&L meaningless for judging this channel's
+        # reliability. Round up to at least one full lot using the contract's real lot size.
+        lot_size = signal.get("lot_size") or db.get_lot_size(resolved_symbol) or 1
+        quantity = max(1, math.ceil(quantity / lot_size)) * lot_size
+
     targets = signal.get("targets") or []
     # Risk Manager defaults: independent of which auto-trade path opened this order (general
     # Broker-Setup auto-trade, F&O Scanner, a Telegram channel) -- trailing/profit-lock is a

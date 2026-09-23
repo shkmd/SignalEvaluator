@@ -628,12 +628,7 @@ def insert_signal(
             if instrument == "EQ":
                 lot_size = 1
             elif instrument in ("CE", "PE") and signal.get("resolved_symbol"):
-                row = conn.execute(
-                    "SELECT lot_size FROM fo_universe WHERE resolved_symbol = ?",
-                    (signal["resolved_symbol"],),
-                ).fetchone()
-                if row and row["lot_size"]:
-                    lot_size = row["lot_size"]
+                lot_size = get_lot_size(signal["resolved_symbol"])
 
         cur = conn.execute(
             """
@@ -1536,6 +1531,21 @@ def disconnect_broker_account(user_id: int, broker: str) -> bool:
 
 
 # ---- F&O universe ----
+
+def get_lot_size(resolved_symbol: str) -> int:
+    """Real NSE lot size for an F&O underlying, or None if not found (e.g. an equity signal,
+    or a symbol not in the cached universe) -- the single lookup insert_signal() and
+    trading.place_paper_order()'s options lot-rounding both use, so there's one place that
+    knows how to resolve this rather than two copies of the same query."""
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT lot_size FROM fo_universe WHERE resolved_symbol = ?", (resolved_symbol,)
+        ).fetchone()
+        return row["lot_size"] if row and row["lot_size"] else None
+    finally:
+        conn.close()
+
 
 def replace_fo_universe(rows: list) -> int:
     """rows: list of {symbol, resolved_symbol, company_name, sector, industry, lot_size,
