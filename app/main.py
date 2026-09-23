@@ -532,6 +532,17 @@ def chartink_webhook(token: str, payload: ChartinkWebhookPayload):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@app.get("/api/chartink/webhook/{token}")
+def chartink_webhook_ping(token: str):
+    # Chartink's own "Test webhook" button on the alert page sends a GET with no payload to
+    # check reachability -- real alerts always POST the actual stocks/trigger_prices data (see
+    # chartink_webhook above). This just confirms the token is valid so that test succeeds;
+    # it never creates a signal.
+    if not db.get_user_id_by_chartink_token(token):
+        raise HTTPException(status_code=404, detail="Unknown or revoked Chartink webhook token")
+    return {"ok": True}
+
+
 @app.get("/api/chartink/settings")
 def chartink_settings(request: Request, user_id: int = Depends(current_user_id)):
     token = db.get_or_create_chartink_token(user_id)
