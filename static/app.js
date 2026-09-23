@@ -174,7 +174,21 @@ function showTab(name) {
     _positionsPollTimer = setInterval(loadPositions, POSITIONS_POLL_MS);
   }
 }
-Object.entries(tabs).forEach(([name, t]) => (t.btn.onclick = () => showTab(name)));
+Object.entries(tabs).forEach(([name, t]) => (t.btn.onclick = () => { showTab(name); closeMobileNav(); }));
+
+// ---- Mobile nav drawer ----
+const _sidebarEl = document.querySelector(".sidebar");
+const _sidebarBackdrop = $("sidebar-backdrop");
+function openMobileNav() {
+  _sidebarEl.classList.add("open");
+  _sidebarBackdrop.classList.add("visible");
+}
+function closeMobileNav() {
+  _sidebarEl.classList.remove("open");
+  _sidebarBackdrop.classList.remove("visible");
+}
+$("btn-mobile-menu").onclick = openMobileNav;
+_sidebarBackdrop.onclick = closeMobileNav;
 
 // ---- Market ticker ----
 async function refreshTicker() {
