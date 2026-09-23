@@ -8,6 +8,13 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
+  <link rel="manifest" href="/static/manifest.json" />
+  <meta name="theme-color" content="#0b0b11" />
+  <link rel="icon" type="image/png" href="/static/icons/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="SignalEval" />
 </head>
 <body>
   <div id="boot-loading" style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:'DM Sans',sans-serif;color:var(--muted,#888)">
@@ -120,6 +127,7 @@
         </button>
       </nav>
       <div class="sidebar-footer">
+        <a href="#" id="btn-install-pwa" class="close-link hidden" style="margin-bottom:8px">&#8595; Install app</a>
         <div class="conn-pill" id="sidebar-conn-pill">
           <span class="conn-dot" id="sidebar-conn-dot"></span>
           <span id="sidebar-conn-text">Checking…</span>

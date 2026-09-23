@@ -291,6 +291,16 @@ def root():
     return Response(content=html, media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
+@app.get("/sw.js")
+def service_worker():
+    # Must be served from the root path (not /static/sw.js) -- a service worker's default
+    # scope is the directory it's served from, and this one needs to control the whole app,
+    # not just /static/.
+    return FileResponse(
+        STATIC_DIR / "sw.js", media_type="application/javascript", headers={"Cache-Control": "no-cache"}
+    )
+
+
 @app.post("/api/parse")
 def parse_signal(req: ParseRequest, user_id: int = Depends(current_user_id)):
     return signal_parser.parse_signal(req.raw_text)

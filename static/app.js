@@ -1,5 +1,30 @@
 const $ = (id) => document.getElementById(id);
 
+// ---- PWA ----
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("Service worker registration failed:", e));
+  });
+}
+
+let _deferredInstallPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  _deferredInstallPrompt = e;
+  $("btn-install-pwa").classList.remove("hidden");
+});
+$("btn-install-pwa").onclick = async (e) => {
+  e.preventDefault();
+  if (!_deferredInstallPrompt) return;
+  _deferredInstallPrompt.prompt();
+  await _deferredInstallPrompt.userChoice;
+  _deferredInstallPrompt = null;
+  $("btn-install-pwa").classList.add("hidden");
+};
+window.addEventListener("appinstalled", () => {
+  $("btn-install-pwa").classList.add("hidden");
+});
+
 // ---- Auth ----
 function showAuthGate() {
   $("boot-loading").classList.add("hidden");
