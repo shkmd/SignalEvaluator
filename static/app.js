@@ -1592,19 +1592,21 @@ async function loadPositions() {
 
   const rows = allRows.filter((o) => matchesCategory(o.instrument, _positionsFilter));
   const tbody = document.querySelector("#positions-table tbody");
+  const cardList = $("positions-cards");
   tbody.innerHTML = "";
+  cardList.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="13" style="color:var(--muted)">No open positions${_positionsFilter !== "ALL" ? " for this filter" : ""}. Enable auto-trade in Broker Setup, or positions will appear here once a signal clears your score threshold.</td></tr>`;
+    const emptyMsg = `No open positions${_positionsFilter !== "ALL" ? " for this filter" : ""}. Enable auto-trade in Broker Setup, or positions will appear here once a signal clears your score threshold.`;
+    tbody.innerHTML = `<tr><td colspan="13" style="color:var(--muted)">${emptyMsg}</td></tr>`;
+    cardList.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:16px 4px">${emptyMsg}</div>`;
     return;
   }
   rows.forEach((o) => {
-    const tr = document.createElement("tr");
+    const symbol = `${o.resolved_symbol || o.symbol}${o.instrument !== "EQ" ? " " + o.strike + o.instrument : ""}`;
     const ltpCell = o.current_price != null ? o.current_price : `<span title="${o.price_unavailable_reason || ""}" style="color:var(--muted)">n/a</span>`;
-    let pnlCell = `<span style="color:var(--muted)">-</span>`;
-    if (o.unrealized_pnl != null) {
-      const pnlColor = o.unrealized_pnl > 0 ? "var(--green)" : o.unrealized_pnl < 0 ? "var(--red)" : "var(--muted)";
-      pnlCell = `<span style="color:${pnlColor}">${formatPnl(o.unrealized_pnl)}</span>`;
-    }
+    const pnlColor = o.unrealized_pnl == null ? "var(--muted)" : o.unrealized_pnl > 0 ? "var(--green)" : o.unrealized_pnl < 0 ? "var(--red)" : "var(--muted)";
+    const pnlText = o.unrealized_pnl != null ? formatPnl(o.unrealized_pnl) : "-";
+    const pnlCell = `<span style="color:${pnlColor}">${pnlText}</span>`;
 
     // At-a-glance SL/target proximity: hit positions normally auto-close within 60s (see
     // trading.monitor_open_positions), so seeing "hit" here briefly just means the price
@@ -1625,11 +1627,12 @@ async function loadPositions() {
     if (o.lock_trigger_pct) riskBits.push(`Lock@${o.lock_trigger_pct}%→${o.lock_pct}%${o.profit_locked ? " ✓" : ""}`);
     const riskLabel = riskBits.length ? riskBits.join(", ") : "Off";
 
+    const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${o.id}</td>
       <td>${categoryBadge(o.instrument)}</td>
       <td><span class="badge ${o.mode === "live" ? "negative" : "neutral"}">${o.mode}</span></td>
-      <td>${o.resolved_symbol || o.symbol}${o.instrument !== "EQ" ? " " + o.strike + o.instrument : ""}</td>
+      <td>${symbol}</td>
       <td>${o.side}</td>
       <td>${o.quantity}</td>
       <td>${o.entry_price ?? "-"}</td>
@@ -1646,6 +1649,42 @@ async function loadPositions() {
     };
     tr.querySelector("[data-risk-id]").onclick = () => openRiskModal(o);
     tbody.appendChild(tr);
+
+    const card = document.createElement("div");
+    card.className = "pos-card";
+    card.innerHTML = `
+      <div class="pc-top">
+        <div class="pc-left">
+          <div class="pc-symbol">${symbol}</div>
+          <div class="pc-badges">
+            <span class="badge ${o.side === "buy" ? "positive" : "negative"}">${o.side}</span>
+            <span class="badge ${o.mode === "live" ? "negative" : "neutral"}">${o.mode}</span>
+            ${categoryBadge(o.instrument)}
+          </div>
+        </div>
+        <button class="icon-btn pc-close" data-id="${o.id}" title="Close position">✕</button>
+      </div>
+      <div class="pc-meta-row">
+        <span>${o.quantity} qty · entry ${o.entry_price ?? "-"}</span>
+        <div class="pc-right">
+          <div class="pc-ltp">${ltpCell}</div>
+          <div class="pc-pnl">${pnlCell}</div>
+        </div>
+      </div>
+      <div class="pc-meta-row">
+        <div class="pc-levels">
+          <span><span class="pc-level-label">SL</span>${slCell}</span>
+          <span><span class="pc-level-label">Target</span>${targetCell}</span>
+        </div>
+        <button class="pc-risk-btn" data-risk-id="${o.id}">${riskLabel}</button>
+      </div>
+    `;
+    card.querySelector("[data-id]").onclick = async () => {
+      await fetch(`/api/trading/orders/${o.id}/close`, { method: "POST" });
+      loadPositions();
+    };
+    card.querySelector("[data-risk-id]").onclick = () => openRiskModal(o);
+    cardList.appendChild(card);
   });
 }
 
@@ -1718,28 +1757,67 @@ async function loadOrderBook() {
   const rows = allRows.filter((o) => matchesCategory(o.instrument, _orderbookFilter));
   _lastOrderbookRows = rows;
   const tbody = document.querySelector("#orderbook-table tbody");
+  const cardList = $("orderbook-cards");
   tbody.innerHTML = "";
+  cardList.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="11" style="color:var(--muted)">No orders yet${_orderbookFilter !== "ALL" ? " for this filter" : ""}.</td></tr>`;
+    const emptyMsg = `No orders yet${_orderbookFilter !== "ALL" ? " for this filter" : ""}.`;
+    tbody.innerHTML = `<tr><td colspan="11" style="color:var(--muted)">${emptyMsg}</td></tr>`;
+    cardList.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:16px 4px">${emptyMsg}</div>`;
     return;
   }
   rows.forEach((o) => {
+    const symbol = `${o.resolved_symbol || o.symbol}${o.instrument !== "EQ" ? " " + o.strike + o.instrument : ""}`;
     const pnlColor = o.pnl == null ? "var(--muted)" : o.pnl >= 0 ? "var(--green)" : "var(--red)";
+    const pnlText = o.pnl != null ? (o.pnl >= 0 ? "+" : "") + o.pnl : "-";
+    const created = (o.created_at || "").slice(0, 16).replace("T", " ");
+    const statusBadgeClass = o.status === "open" ? "pending" : o.status === "sl_hit" ? "negative" : "positive";
+
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${o.id}</td>
-      <td>${(o.created_at || "").slice(0, 16).replace("T", " ")}</td>
+      <td>${created}</td>
       <td>${categoryBadge(o.instrument)}</td>
       <td><span class="badge ${o.mode === "live" ? "negative" : "neutral"}">${o.mode}</span></td>
-      <td>${o.resolved_symbol || o.symbol}${o.instrument !== "EQ" ? " " + o.strike + o.instrument : ""}</td>
+      <td>${symbol}</td>
       <td>${o.side}</td>
       <td>${o.quantity}</td>
       <td>${o.entry_price ?? "-"}</td>
       <td>${o.exit_price ?? "-"}</td>
-      <td style="color:${pnlColor}">${o.pnl != null ? (o.pnl >= 0 ? "+" : "") + o.pnl : "-"}</td>
-      <td><span class="badge ${o.status === "open" ? "pending" : o.status === "sl_hit" ? "negative" : "positive"}">${o.status}</span></td>
+      <td style="color:${pnlColor}">${pnlText}</td>
+      <td><span class="badge ${statusBadgeClass}">${o.status}</span></td>
     `;
     tbody.appendChild(tr);
+
+    const card = document.createElement("div");
+    card.className = "pos-card";
+    card.innerHTML = `
+      <div class="pc-top">
+        <div class="pc-left">
+          <div class="pc-symbol">${symbol}</div>
+          <div class="pc-badges">
+            <span class="badge ${o.side === "buy" ? "positive" : "negative"}">${o.side}</span>
+            <span class="badge ${o.mode === "live" ? "negative" : "neutral"}">${o.mode}</span>
+            ${categoryBadge(o.instrument)}
+            <span class="badge ${statusBadgeClass}">${o.status}</span>
+          </div>
+        </div>
+        <div class="pc-right">
+          <div class="pc-ltp" style="color:${pnlColor}">${pnlText}</div>
+        </div>
+      </div>
+      <div class="pc-meta-row">
+        <span>${created}</span>
+        <span>${o.quantity} qty</span>
+      </div>
+      <div class="pc-meta-row">
+        <div class="pc-levels">
+          <span><span class="pc-level-label">Entry</span>${o.entry_price ?? "-"}</span>
+          <span><span class="pc-level-label">Exit</span>${o.exit_price ?? "-"}</span>
+        </div>
+      </div>
+    `;
+    cardList.appendChild(card);
   });
 }
 
