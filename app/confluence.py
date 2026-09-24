@@ -50,7 +50,7 @@ def _record_and_trade(user_id: int, scanner_row: dict, quantity: float) -> None:
     instrument = scanner_row["instrument"]
     # Same action-derivation as scanner_signals._build_atm_signal / _build_equity_signal at the
     # point this signal was originally created -- CE/PE scanner signals are always *buying* the
-    # option contract regardless of direction (see the _order_side fix in trading.py for why
+    # option contract regardless of direction (see the order_side fix in trading.py for why
     # this can't be inferred from evaluation["direction"] alone: PE is always "bearish" there).
     action = "buy" if instrument in ("CE", "PE") else ("buy" if scanner_row["direction"] == "bullish" else "sell")
     signal = {

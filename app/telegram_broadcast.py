@@ -23,6 +23,12 @@ def _fmt_num(n):
 
 
 def format_signal_message(signal: dict, evaluation: dict) -> str:
+    # Local import -- app.trading imports app.alerts, which imports this module, so importing
+    # trading at module level here would be circular. Deferred until call time, by which point
+    # every module involved has already finished loading, same pattern trading.py itself uses
+    # for app.brokers.
+    from app import trading
+
     symbol = signal.get("resolved_symbol") or signal.get("symbol")
     instrument = (signal.get("instrument") or "EQ").upper()
     entry_low = signal.get("entry_low")
@@ -30,6 +36,11 @@ def format_signal_message(signal: dict, evaluation: dict) -> str:
     sl = signal.get("sl")
     targets = signal.get("targets") or []
     signal_type = (signal.get("signal_type") or "positional").capitalize()
+    # A signal's stored "direction" is a market-thesis label, not the order side -- every PE is
+    # "bearish" by definition even though buying a put is this app's actual strategy. Using the
+    # wrong one here previously labeled every genuine sell/short signal "Buy Range", which is
+    # actively misleading, not just a display quirk.
+    range_label = "Buy Range" if trading.order_side(signal, evaluation) == "buy" else "Sell Range"
 
     lines = []
     if instrument in ("CE", "PE") and signal.get("strike"):
@@ -47,9 +58,9 @@ def format_signal_message(signal: dict, evaluation: dict) -> str:
 
     lines.append("")
     if entry_low == entry_high:
-        lines.append(f"Buy Range - {_fmt_num(entry_high)}")
+        lines.append(f"{range_label} - {_fmt_num(entry_high)}")
     else:
-        lines.append(f"Buy Range - {_fmt_num(entry_high)}/{_fmt_num(entry_low)}")
+        lines.append(f"{range_label} - {_fmt_num(entry_high)}/{_fmt_num(entry_low)}")
     lines.append("")
     lines.append(f"SL {_fmt_num(sl)}")
     lines.append("")

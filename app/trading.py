@@ -119,7 +119,7 @@ def size_for_reliability(user_id: int, signal_id: int, base_quantity: float) -> 
     return max(1, round(base_quantity * multiplier))
 
 
-def _order_side(signal: dict, evaluation: dict) -> str:
+def order_side(signal: dict, evaluation: dict) -> str:
     """The actual buy/sell action for this order. Prefers signal["action"] -- set correctly
     upstream (scanner_signals.py's _build_atm_signal always sets "buy" for a CE or PE, since
     buying the option matching your directional view is the actual strategy this app trades;
@@ -172,7 +172,7 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
     resolved_symbol = signal["resolved_symbol"]
     instrument = signal.get("instrument", "EQ")
     strike = signal.get("strike")
-    side = _order_side(signal, evaluation)
+    side = order_side(signal, evaluation)
 
     price_info = get_live_price(resolved_symbol, instrument, strike, user_id=user_id)
     entry_price = price_info["price"] if price_info["available"] else (signal.get("entry_high") or signal.get("entry_low"))
@@ -264,7 +264,7 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
             }
 
     resolved_symbol = signal["resolved_symbol"]
-    side = _order_side(signal, evaluation).upper()
+    side = order_side(signal, evaluation).upper()
     base_quantity = size_for_reliability(user_id, signal_id, settings["quantity"])
     instrument = signal.get("instrument", "EQ")
     targets = signal.get("targets") or []
