@@ -543,17 +543,31 @@ def chartink_webhook_ping(token: str):
     return {"ok": True}
 
 
+def _external_origin(request: Request) -> str:
+    # request.url.scheme reflects the connection between Railway's edge and this container,
+    # which is always plain HTTP (uvicorn isn't run with --proxy-headers here) -- it is NOT
+    # the scheme the real external client used. That previously produced http:// webhook URLs
+    # for every user. Railway's edge 301-redirects a plain-HTTP request to HTTPS, and Chartink's
+    # real (non-test) webhook delivery doesn't follow redirects for POST, so every genuine
+    # alert silently failed to deliver while the URL still "looked" reachable. This app is only
+    # ever meant to be reached over HTTPS externally, so default to it outright rather than
+    # trust a scheme this process can't actually observe.
+    proto = request.headers.get("x-forwarded-proto", "https")
+    host = request.headers.get("host", request.url.netloc)
+    return f"{proto}://{host}"
+
+
 @app.get("/api/chartink/settings")
 def chartink_settings(request: Request, user_id: int = Depends(current_user_id)):
     token = db.get_or_create_chartink_token(user_id)
-    origin = f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
+    origin = _external_origin(request)
     return {"webhook_url": f"{origin}/api/chartink/webhook/{token}", "scans": db.list_chartink_scans(user_id)}
 
 
 @app.post("/api/chartink/regenerate-token")
 def chartink_regenerate_token(request: Request, user_id: int = Depends(current_user_id)):
     token = db.regenerate_chartink_token(user_id)
-    origin = f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
+    origin = _external_origin(request)
     return {"webhook_url": f"{origin}/api/chartink/webhook/{token}"}
 
 
@@ -1019,7 +1033,10 @@ class UpstoxCredentialsRequest(BaseModel):
 
 
 def _upstox_redirect_uri(request: Request) -> str:
-    return str(request.base_url).rstrip("/") + "/api/broker/upstox/callback"
+    # request.base_url has the same internal-scheme problem _external_origin() exists to work
+    # around (see its docstring) -- was previously sending Upstox an http:// redirect_uri,
+    # which most OAuth providers reject outright for a non-localhost redirect.
+    return f"{_external_origin(request)}/api/broker/upstox/callback"
 
 
 @app.post("/api/broker/upstox/credentials")
