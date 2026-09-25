@@ -25,6 +25,51 @@ def risk_reward(entry_low, entry_high, sl, targets):
     }
 
 
+STAGE_NAMES = {1: "Stage 1 (basing)", 2: "Stage 2 (advancing)", 3: "Stage 3 (topping)", 4: "Stage 4 (declining)"}
+
+
+def market_context_factor(ctx: dict, direction: str):
+    """(points out of 15, note, red_flags). Bullish calls want a Stage 2 stock with a high RS
+    rank in a strong sector and a broad market; bearish calls want the mirror image.
+    Breakdown: stage 6 + stock RS 4 + sector RS 3 + market breadth 2."""
+    bull = direction == "bullish"
+    stage, rs = ctx.get("stage"), ctx.get("rs")
+    flags = []
+
+    stage_pts = ({2: 6, 3: 3, 1: 2, 4: 0} if bull else {4: 6, 3: 3, 1: 2, 2: 0}).get(stage, 0)
+
+    fav_rs = rs if bull else 100 - rs
+    rs_pts = 4 if fav_rs >= 70 else 3 if fav_rs >= 50 else 1 if fav_rs >= 30 else 0
+
+    sector_rs = ctx.get("sector_rs")
+    if sector_rs is None:
+        sector_pts, sector_note = 1, "sector n/a"
+    else:
+        fav_sec = sector_rs if bull else 100 - sector_rs
+        sector_pts = 3 if fav_sec >= 60 else 2 if fav_sec >= 45 else 1 if fav_sec >= 30 else 0
+        sector_note = f"{ctx.get('sector')} median RS {sector_rs}"
+
+    regime = ctx.get("regime")
+    aligned = (bull and regime == "bullish") or (not bull and regime == "bearish")
+    opposed = (bull and regime == "bearish") or (not bull and regime == "bullish")
+    breadth_pts = 2 if aligned else 0 if opposed else 1
+
+    if bull and stage == 4:
+        flags.append("Stock is in Weinstein Stage 4 (below a falling 30-week line) -- buying against a long-term downtrend.")
+    if not bull and stage == 2:
+        flags.append("Stock is in Weinstein Stage 2 (above a rising 30-week line) -- shorting/PE against a long-term uptrend.")
+    if fav_rs < 30:
+        flags.append(f"Relative strength rank is {rs}/99 -- the stock is among the {'laggards' if bull else 'leaders'} of the F&O universe.")
+    if opposed:
+        flags.append(f"Market breadth is {regime} ({ctx.get('breadth_pct')}% of F&O stocks above their 30-week line), against this call.")
+
+    note = (
+        f"{STAGE_NAMES.get(stage, 'stage n/a')}, RS {rs}/99, {sector_note}, "
+        f"breadth {ctx.get('breadth_pct')}% above 30-wk line ({regime})"
+    )
+    return stage_pts + rs_pts + sector_pts + breadth_pts, note, flags
+
+
 def evaluate_signal(
     signal: dict,
     technicals: dict,
@@ -32,9 +77,11 @@ def evaluate_signal(
     news: dict,
     screener: dict = None,
     stock_context: dict = None,
+    market_context: dict = None,
 ) -> dict:
     screener = screener or {"available": False}
     stock_context = stock_context or {"available": False}
+    market_context = market_context or {"available": False}
     direction = "bearish" if (signal.get("instrument") == "PE" or signal.get("action") == "sell") else "bullish"
 
     score = 0
@@ -184,6 +231,16 @@ def evaluate_signal(
         breakdown.append(("Stock context", tier_pts + sector_pts, 15, f"{cap_note}. {sector_note}"))
     else:
         breakdown.append(("Stock context", 0, 15, stock_context.get("reason", "Not available.")))
+
+    # --- Market context: stage / RS rank / sector / breadth (15 pts) ---
+    # Only scored when the nightly job has data for this symbol -- for indices and non-F&O
+    # names there is nothing to score, and adding an always-zero row would drag their score down.
+    if market_context.get("available"):
+        mc_pts, mc_note, mc_flags = market_context_factor(market_context, direction)
+        max_score += 15
+        score += mc_pts
+        breakdown.append(("Market context", mc_pts, 15, mc_note))
+        red_flags.extend(mc_flags)
 
     # --- Screener confirmation (20 pts) ---
     max_score += 20

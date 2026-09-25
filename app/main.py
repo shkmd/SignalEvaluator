@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 import secrets
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -10,7 +12,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 
 from app import db, parser as signal_parser, technicals, options as options_mod, news as news_mod, scoring
-from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score
+from app import telegram_ingest, telegram_auth, market, trading, auth, screener, stock_score, market_context
 from app import fo_universe, scanner, telegram_broadcast, alerts, strategies as strategies_mod, backtest as backtest_mod
 from app import chartink, rate_limit
 from app.brokers import kite as kite_broker, upstox as upstox_broker, dhan as dhan_broker
@@ -94,9 +96,48 @@ async def _auto_scan_loop():
             await asyncio.sleep(AUTO_SCAN_IDLE_CHECK_SECONDS)
 
 
+MARKET_CONTEXT_CHECK_SECONDS = 10 * 60
+MARKET_CONTEXT_RETRY_SECONDS = 30 * 60  # don't hammer yfinance/Kite if a nightly job keeps failing
+_market_context_task = None
+_market_context_last_attempt: dict = {}
+_market_context_lock = threading.Lock()
+
+
+def _run_market_job(name: str) -> dict:
+    with _market_context_lock:  # a manual refresh and the scheduled loop must not overlap
+        job = market_context.run_context_job if name == market_context.JOB_CONTEXT else market_context.run_oi_snapshot_job
+        try:
+            result = job()
+        except Exception as e:
+            print(f"[market_context] {name} crashed: {e}")
+            result = {"ok": False, "reason": str(e)}
+        if not result.get("ok"):
+            print(f"[market_context] {name}: {result.get('reason')}")
+        return result
+
+
+async def _market_context_loop():
+    """Nightly RS/stage/breadth job (after ~16:15 IST) and futures-OI snapshot (after 15:45 IST),
+    each at most once per trading day; plus a one-off bootstrap on the very first run."""
+    await asyncio.sleep(45)  # let startup settle before the heavy download
+    if market_context.bootstrap_needed():
+        await asyncio.to_thread(_run_market_job, market_context.JOB_CONTEXT)
+    while True:
+        try:
+            for name in market_context.due_jobs():
+                last = _market_context_last_attempt.get(name)
+                if last and (time.time() - last) < MARKET_CONTEXT_RETRY_SECONDS:
+                    continue
+                _market_context_last_attempt[name] = time.time()
+                await asyncio.to_thread(_run_market_job, name)
+        except Exception as e:
+            print(f"[market_context] loop error: {e}")
+        await asyncio.sleep(MARKET_CONTEXT_CHECK_SECONDS)
+
+
 @app.on_event("startup")
 async def _startup():
-    global _monitor_task, _auto_scan_task
+    global _monitor_task, _auto_scan_task, _market_context_task
     db.init_db()
     init_tm_schema()
     try:
@@ -105,6 +146,7 @@ async def _startup():
         print(f"[telegram] Startup skipped: {e}")
     _monitor_task = asyncio.create_task(_position_monitor_loop())
     _auto_scan_task = asyncio.create_task(_auto_scan_loop())
+    _market_context_task = asyncio.create_task(_market_context_loop())
 
 
 @app.on_event("shutdown")
@@ -113,6 +155,8 @@ async def _shutdown():
         _monitor_task.cancel()
     if _auto_scan_task:
         _auto_scan_task.cancel()
+    if _market_context_task:
+        _market_context_task.cancel()
 
 
 def current_user_id(user: dict = Depends(auth.require_user)) -> int:
@@ -333,13 +377,15 @@ def evaluate(req: EvaluateRequest, user_id: int = Depends(current_user_id)):
     headlines = news_mod.fetch_news(resolved_symbol)
     scr = screener.evaluate_screener(resolved_symbol, direction)
     stock_ctx = stock_score.evaluate_stock_context(resolved_symbol)
+    market_ctx = market_context.context_for(resolved_symbol)
 
-    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines, scr, stock_ctx)
+    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines, scr, stock_ctx, market_ctx)
     evaluation["technicals"] = tech
     evaluation["options"] = opts
     evaluation["news"] = headlines
     evaluation["screener"] = scr
     evaluation["stock_context"] = stock_ctx
+    evaluation["market_context"] = market_ctx
 
     signal_id = db.insert_signal(user_id, signal, evaluation, req.channel or "unknown")
     evaluation["signal_id"] = signal_id
@@ -400,6 +446,30 @@ def get_channel_stats(user_id: int = Depends(current_user_id)):
 @app.get("/api/stats/reliability")
 def get_reliability_dashboard(user_id: int = Depends(current_user_id)):
     return db.reliability_dashboard(user_id)
+
+
+@app.get("/api/market-context")
+def get_market_context(user_id: int = Depends(current_user_id)):
+    summary = db.get_latest_market_summary()
+    return {
+        "available": summary is not None,
+        "summary": summary,
+        "oi_snapshot_days": db.fut_oi_snapshot_days(),
+        "jobs": {
+            "market_context": db.get_job_last_date(market_context.JOB_CONTEXT),
+            "fut_oi_snapshot": db.get_job_last_date(market_context.JOB_OI),
+        },
+    }
+
+
+@app.post("/api/market-context/refresh")
+def refresh_market_context(background_tasks: BackgroundTasks, user_id: int = Depends(current_user_id)):
+    """Runs both nightly jobs now, in the background (the context job downloads ~200 charts)."""
+    if _market_context_lock.locked():
+        raise HTTPException(status_code=409, detail="A market-context job is already running.")
+    for name in (market_context.JOB_CONTEXT, market_context.JOB_OI):
+        background_tasks.add_task(_run_market_job, name)
+    return {"started": True}
 
 
 @app.get("/api/market/ticker")

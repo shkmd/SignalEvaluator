@@ -468,6 +468,19 @@ function renderEvaluation(data, prefix) {
   `
     : `<div style="color:var(--muted)">${sc.reason || "Not available."}</div>`;
 
+  const mc = data.market_context || {};
+  const stageNames = { 1: "Stage 1 · basing", 2: "Stage 2 · advancing", 3: "Stage 3 · topping", 4: "Stage 4 · declining" };
+  $(id("mctx-kv")).innerHTML = mc.available
+    ? `
+    <div><span>Weinstein stage</span>${stageNames[mc.stage] || "n/a"}</div>
+    <div><span>Relative strength rank</span>${mc.rs}/99</div>
+    <div><span>vs 30-week line</span>${mc.ext_pct != null ? (mc.ext_pct >= 0 ? "+" : "") + mc.ext_pct + "%" : "n/a"}</div>
+    <div><span>Sector (median RS)</span>${escapeHtml(mc.sector || "n/a")}${mc.sector_rs != null ? " · " + mc.sector_rs : ""}</div>
+    <div><span>Market breadth</span>${mc.breadth_pct}% above 30-wk line · ${mc.regime}</div>
+    <div><span>As of</span>${mc.as_of}</div>
+  `
+    : `<div style="color:var(--muted)">${escapeHtml(mc.reason || "Not available.")}</div>`;
+
   const rr = data.risk_reward || {};
   $(id("rr-kv")).innerHTML = rr.available
     ? `
@@ -662,6 +675,8 @@ const DETAIL_MODAL_TEMPLATE = `
   </div>
   <h2 style="margin-top:20px">Stock Context</h2>
   <div class="kv" id="d-stock-kv"></div>
+  <h2 style="margin-top:20px">Market Context</h2>
+  <div class="kv" id="d-mctx-kv"></div>
   <h2 style="margin-top:20px">Risk / Reward</h2>
   <div class="kv" id="d-rr-kv"></div>
   <h2 style="margin-top:20px">Screener checklist</h2>
@@ -948,6 +963,19 @@ async function loadDashboardSummary() {
     if (tgRes.ok) {
       const tg = await tgRes.json();
       tiles.push(["Telegram", tg.listening ? "Listening" : tg.authorized ? "Connected" : "Not connected"]);
+    }
+  } catch (e) {}
+
+  try {
+    const mcRes = await fetch("/api/market-context");
+    if (mcRes.ok) {
+      const mc = await mcRes.json();
+      if (mc.available) {
+        const m = mc.summary;
+        tiles.push(["Market regime", `${m.regime.charAt(0).toUpperCase() + m.regime.slice(1)} · ${m.breadth_pct}% above 30-wk`]);
+      } else {
+        tiles.push(["Market regime", "computing…"]);
+      }
     }
   } catch (e) {}
 

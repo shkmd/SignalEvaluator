@@ -5,7 +5,7 @@ import asyncio
 
 from telethon import events
 
-from app import db, scoring, trading, screener, stock_score, telegram_broadcast, alerts
+from app import db, scoring, trading, screener, stock_score, telegram_broadcast, alerts, market_context
 from app import parser as signal_parser
 from app import technicals, options as options_mod, news as news_mod
 from app.telegram_client import get_client, register_active_loop
@@ -142,13 +142,15 @@ def _evaluate_and_store(user_id: int, parsed: dict, chat_id: int, message_id: in
     headlines = news_mod.fetch_news(resolved_symbol)
     scr = screener.evaluate_screener(resolved_symbol, direction)
     stock_ctx = stock_score.evaluate_stock_context(resolved_symbol)
+    market_ctx = market_context.context_for(resolved_symbol)
 
-    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines, scr, stock_ctx)
+    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines, scr, stock_ctx, market_ctx)
     evaluation["technicals"] = tech
     evaluation["options"] = opts
     evaluation["news"] = headlines
     evaluation["screener"] = scr
     evaluation["stock_context"] = stock_ctx
+    evaluation["market_context"] = market_ctx
 
     channel_title = db.get_channel_title(user_id, chat_id) or str(chat_id)
     signal_id = db.insert_signal(

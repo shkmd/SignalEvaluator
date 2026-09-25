@@ -14,7 +14,7 @@ qualified for that direction in the previous scan), so one continuous qualificat
 produces one signal, not one every scan.
 """
 from app import db, scoring, trading, telegram_broadcast, alerts, confluence
-from app import technicals, options as options_mod, news as news_mod, screener, stock_score
+from app import technicals, options as options_mod, news as news_mod, screener, stock_score, market_context
 
 MIN_RISK_PCT = 0.005  # floor so a same-day close==low (or close==high) never yields zero risk
 PREMIUM_SL_PCT = 0.30  # options move fast -- stop-loss as a % of premium, not underlying range
@@ -144,13 +144,15 @@ def _generate_one(user_id: int, result: dict, classification: str) -> int:
     headlines = news_mod.fetch_news(resolved_symbol)
     scr = screener.evaluate_screener(resolved_symbol, direction)
     stock_ctx = stock_score.evaluate_stock_context(resolved_symbol)
+    market_ctx = market_context.context_for(resolved_symbol)
 
-    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines, scr, stock_ctx)
+    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines, scr, stock_ctx, market_ctx)
     evaluation["technicals"] = tech
     evaluation["options"] = opts
     evaluation["news"] = headlines
     evaluation["screener"] = scr
     evaluation["stock_context"] = stock_ctx
+    evaluation["market_context"] = market_ctx
 
     signal_id = db.insert_signal(user_id, signal, evaluation, "F&O Scanner", source="scanner")
     if signal_id:

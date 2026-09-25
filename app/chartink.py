@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qs
 
 from app import db, scoring, trading, telegram_broadcast, alerts, confluence
-from app import technicals, news as news_mod, screener, stock_score
+from app import technicals, news as news_mod, screener, stock_score, market_context
 
 MIN_RISK_PCT = 0.005  # floor so a near-zero ATR (illiquid/newly-listed stock) never yields ~zero risk
 ATR_RISK_MULT = 1.5
@@ -132,13 +132,15 @@ def _generate_one(user_id: int, scan: dict, symbol: str, trigger_price: float, b
     headlines = news_mod.fetch_news(resolved_symbol)
     scr = screener.evaluate_screener(resolved_symbol, direction)
     stock_ctx = stock_score.evaluate_stock_context(resolved_symbol)
+    market_ctx = market_context.context_for(resolved_symbol)
 
-    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines, scr, stock_ctx)
+    evaluation = scoring.evaluate_signal(signal, tech, opts, headlines, scr, stock_ctx, market_ctx)
     evaluation["technicals"] = tech
     evaluation["options"] = opts
     evaluation["news"] = headlines
     evaluation["screener"] = scr
     evaluation["stock_context"] = stock_ctx
+    evaluation["market_context"] = market_ctx
 
     external_ref = f"{scan_url}|{symbol}|{triggered_at}"
     signal_id = db.insert_signal(

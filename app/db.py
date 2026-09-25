@@ -372,6 +372,48 @@ CREATE TABLE IF NOT EXISTS confluence_settings (
     quantity REAL NOT NULL DEFAULT 1,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+-- Market context (nightly, shared across users -- same market data for everyone): per-stock
+-- relative-strength rank + Weinstein stage over the F&O universe, a breadth/regime summary, and
+-- daily futures open-interest snapshots (so OI *change* history accumulates from day one).
+CREATE TABLE IF NOT EXISTS market_context_stock (
+    as_of TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    sector TEXT,
+    rs INTEGER,
+    stage INTEGER,
+    ext_pct REAL,
+    ret_3m REAL,
+    ret_6m REAL,
+    PRIMARY KEY (as_of, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS market_context_summary (
+    as_of TEXT PRIMARY KEY,
+    breadth_pct REAL,
+    regime TEXT,
+    stocks_count INTEGER,
+    stage_counts_json TEXT,
+    sector_rs_json TEXT,
+    computed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fut_oi_snapshot (
+    as_of TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    expiry TEXT NOT NULL,
+    fut_ltp REAL,
+    fut_oi REAL,
+    PRIMARY KEY (as_of, symbol, expiry)
+);
+
+-- Which nightly job last completed on which IST date, so a restart doesn't rerun (or skip) one.
+CREATE TABLE IF NOT EXISTS job_runs (
+    name TEXT PRIMARY KEY,
+    last_date TEXT NOT NULL,
+    detail TEXT,
+    finished_at TEXT NOT NULL
+);
+
 """
 
 
@@ -2212,5 +2254,124 @@ def mark_sl_alert_sent(order_id: int) -> None:
     try:
         conn.execute("UPDATE orders SET sl_alert_sent = 1 WHERE id = ?", (order_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ---- Market context + futures OI snapshots (shared, not per-user) ----
+
+def get_job_last_date(name: str):
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT last_date FROM job_runs WHERE name = ?", (name,)).fetchone()
+        return row["last_date"] if row else None
+    finally:
+        conn.close()
+
+
+def set_job_done(name: str, date_str: str, detail: str = None) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            "INSERT INTO job_runs (name, last_date, detail, finished_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET last_date=excluded.last_date, detail=excluded.detail, "
+            "finished_at=excluded.finished_at",
+            (name, date_str, detail, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_market_context(as_of: str, stock_rows: list, summary: dict) -> None:
+    """Replaces the given day's snapshot atomically and prunes anything older than 90 days."""
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM market_context_stock WHERE as_of = ?", (as_of,))
+        conn.executemany(
+            "INSERT INTO market_context_stock (as_of, symbol, sector, rs, stage, ext_pct, ret_3m, ret_6m) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (as_of, r["symbol"], r.get("sector"), r["rs"], r["stage"], r.get("ext_pct"),
+                 r.get("ret_3m"), r.get("ret_6m"))
+                for r in stock_rows
+            ],
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO market_context_summary "
+            "(as_of, breadth_pct, regime, stocks_count, stage_counts_json, sector_rs_json, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                as_of, summary["breadth_pct"], summary["regime"], summary["stocks_count"],
+                json.dumps(summary.get("stage_counts") or {}), json.dumps(summary.get("sector_rs") or {}),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        cutoff = (datetime.fromisoformat(as_of) - timedelta(days=90)).date().isoformat()
+        conn.execute("DELETE FROM market_context_stock WHERE as_of < ?", (cutoff,))
+        conn.execute("DELETE FROM market_context_summary WHERE as_of < ?", (cutoff,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_latest_market_summary():
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM market_context_summary ORDER BY as_of DESC LIMIT 1").fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["stage_counts"] = json.loads(d.pop("stage_counts_json") or "{}")
+        d["sector_rs"] = json.loads(d.pop("sector_rs_json") or "{}")
+        return d
+    finally:
+        conn.close()
+
+
+def get_latest_stock_context(symbol: str):
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM market_context_stock WHERE symbol = ? ORDER BY as_of DESC LIMIT 1", (symbol.upper(),)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def save_fut_oi_snapshot(as_of: str, rows: list) -> int:
+    conn = _conn()
+    try:
+        conn.executemany(
+            "INSERT OR REPLACE INTO fut_oi_snapshot (as_of, symbol, expiry, fut_ltp, fut_oi) VALUES (?, ?, ?, ?, ?)",
+            [(as_of, r["symbol"], r["expiry"], r.get("ltp"), r.get("oi")) for r in rows],
+        )
+        cutoff = (datetime.fromisoformat(as_of) - timedelta(days=400)).date().isoformat()
+        conn.execute("DELETE FROM fut_oi_snapshot WHERE as_of < ?", (cutoff,))
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def fut_oi_snapshot_days() -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT as_of, COUNT(*) AS n FROM fut_oi_snapshot GROUP BY as_of ORDER BY as_of DESC LIMIT 30"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_user_ids_with_broker(broker: str) -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT user_id FROM broker_accounts WHERE broker = ? AND connected = 1", (broker,)
+        ).fetchall()
+        return [r["user_id"] for r in rows]
     finally:
         conn.close()

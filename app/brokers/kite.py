@@ -213,6 +213,34 @@ def find_option_by_strike(user_id: int, name: str, strike: float, instrument: st
     }
 
 
+def fetch_futures_oi(user_id: int, names: list) -> list:
+    """LTP + open interest for every upcoming futures contract of the given underlyings, in
+    Kite's own batched quote calls -- the raw material for the nightly OI-change history
+    (market_context.run_oi_snapshot_job). Returns [{symbol, expiry, ltp, oi}]."""
+    df = _load_instruments(user_id, "NFO")
+    futs = df[(df["instrument_type"] == "FUT") & (df["name"].isin([n.upper() for n in names]))].copy()
+    if futs.empty:
+        return []
+    today = datetime.now(IST).date()
+    futs["expiry_date"] = pd.to_datetime(futs["expiry"]).dt.date
+    futs = futs[futs["expiry_date"] >= today]
+
+    kite = get_client(user_id)
+    keys = {f"NFO:{r.tradingsymbol}": (r.name, r.expiry_date.isoformat()) for r in futs.itertuples()}
+    out = []
+    key_list = list(keys)
+    for i in range(0, len(key_list), 200):
+        try:
+            quotes = kite.quote(key_list[i:i + 200])
+        except Exception as e:
+            print(f"[kite] futures quote batch failed: {e}")
+            continue
+        for key, q in quotes.items():
+            name, expiry = keys[key]
+            out.append({"symbol": name, "expiry": expiry, "ltp": q.get("last_price"), "oi": q.get("oi")})
+    return out
+
+
 def fetch_fo_underlyings(user_id: int) -> list:
     """F&O-eligible stocks with real lot sizes and expiries, from Kite's own NFO instrument
     dump -- replaces the symbol-name-only list from the free NSE endpoint."""
