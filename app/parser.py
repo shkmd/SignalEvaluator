@@ -22,6 +22,21 @@ SYMBOL_MAP = {
 
 SIGNAL_TYPE_KEYWORDS = ["POSITIONAL", "INTRADAY", "BTST", "SWING", "SCALP"]
 
+# Ordinary words that sit right after BUY/SELL or at the start of a line in channel messages but
+# are never a stock symbol. Without this, "BUY ABOVE 130" parsed "ABOVE" as the symbol.
+NOT_A_SYMBOL = {
+    "ABOVE", "ABV", "BELOW", "NEAR", "AROUND", "AT", "ON", "RANGE", "WITH", "ONLY", "TODAY", "NOW",
+    "CMP", "LEVEL", "LEVELS", "PRICE", "ZONE", "STOCK", "CALL", "PUT", "OPTION", "OPTIONS", "EQUITY",
+    "CASH", "FUT", "FUTURE", "FUTURES", "LOT", "LOTS", "QTY", "SL", "TGT", "TARGET", "TARGETS",
+    "STOPLOSS", "BUY", "SELL", "ENTRY", "EXIT", "SCORE", "TRADE", "SETUP",
+    "POSITIONAL", "INTRADAY", "BTST", "SWING", "SCALP",
+}
+
+# "NIFTY 23200 CE" at the start of a line -- the common channel layout, symbol first.
+_HEADER_RE = re.compile(r"^[ \t]*([A-Z&\-]{2,20})[ \t]+(\d+(?:\.\d+)?)[ \t]*(CE|PE)\b", re.MULTILINE)
+# "BUY RELIANCE 2900 CE" -- action first.
+_ACTION_SYMBOL_RE = re.compile(r"\b(BUY|SELL)\s+([A-Z&\-]{2,20})\s*(\d+(?:\.\d+)?)?\s*(CE|PE)?\b")
+
 
 def _to_float(s):
     try:
@@ -60,22 +75,31 @@ def parse_signal(raw_text: str) -> dict:
         result["signal_type"] = "positional"
         result["parse_warnings"].append("No signal type (POSITIONAL/INTRADAY/...) found, defaulted to positional.")
 
-    # Buy/Sell + SYMBOL [+ STRIKE] [+ CE/PE]
-    m = re.search(
-        r"\b(BUY|SELL)\s+([A-Z&\-]{2,20})\s*(\d+(?:\.\d+)?)?\s*(CE|PE)?\b",
-        upper,
-    )
-    if m:
-        result["action"] = m.group(1).lower()
-        raw_symbol = m.group(2).strip("-")
+    action_m = re.search(r"\b(BUY|SELL)\b", upper)
+    if action_m:
+        result["action"] = action_m.group(1).lower()
+
+    symbol_m = strike = instrument = None
+    for m in _HEADER_RE.finditer(upper):
+        if m.group(1).strip("-") not in NOT_A_SYMBOL:
+            symbol_m, strike, instrument = m.group(1), m.group(2), m.group(3)
+            break
+    if symbol_m is None:
+        for m in _ACTION_SYMBOL_RE.finditer(upper):
+            if m.group(2).strip("-") not in NOT_A_SYMBOL:
+                symbol_m, strike, instrument = m.group(2), m.group(3), m.group(4)
+                break
+
+    if symbol_m:
+        raw_symbol = symbol_m.strip("-")
         result["symbol"] = raw_symbol
         result["resolved_symbol"] = SYMBOL_MAP.get(raw_symbol, raw_symbol)
-        if m.group(3):
-            result["strike"] = _to_float(m.group(3))
-        if m.group(4):
-            result["instrument"] = m.group(4)
+        if strike:
+            result["strike"] = _to_float(strike)
+        if instrument:
+            result["instrument"] = instrument
     else:
-        result["parse_warnings"].append("Could not find a 'BUY/SELL SYMBOL [STRIKE] [CE/PE]' pattern.")
+        result["parse_warnings"].append("Could not find a 'SYMBOL [STRIKE] [CE/PE]' or 'BUY/SELL SYMBOL' pattern.")
 
     # Entry range: "Around 13-14", "Range 13-14", "13-14 Range"
     m = re.search(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*(?:RANGE)?", upper)
@@ -83,6 +107,14 @@ def parse_signal(raw_text: str) -> dict:
         lo, hi = _to_float(m.group(1)), _to_float(m.group(2))
         if lo is not None and hi is not None and lo <= hi:
             result["entry_low"], result["entry_high"] = lo, hi
+
+    # "BUY ABOVE 130" / "BUY NEAR 130" / "SELL BELOW 90" / "BUY AT 130" -- a single entry price.
+    if result["entry_low"] is None:
+        m = re.search(r"\b(?:ABOVE|ABV|NEAR|AROUND|BELOW)\s*[:\-]?\s*(\d+(?:\.\d+)?)", upper) or re.search(
+            r"\b(?:BUY|SELL)\s+(?:AT|@|ON)\s*(\d+(?:\.\d+)?)", upper
+        )
+        if m:
+            result["entry_low"] = result["entry_high"] = _to_float(m.group(1))
 
     # "Add more at 11"
     m = re.search(r"ADD\s+MORE\s+AT\s+(\d+(?:\.\d+)?)", upper)
@@ -99,7 +131,7 @@ def parse_signal(raw_text: str) -> dict:
         result["parse_warnings"].append("No stop-loss (SL) found.")
 
     # Target(s) 16/18/20/24/30+
-    m = re.search(r"TARGET[S]?\s*[:\-]?\s*([\d/\.\+\s]+)", upper)
+    m = re.search(r"\b(?:TARGETS?|TGTS?|TRGTS?)\b\s*[:\-]?\s*([\d/\.\+\s,]+)", upper)
     if m:
         chunk = m.group(1).strip()
         if chunk.endswith("+"):

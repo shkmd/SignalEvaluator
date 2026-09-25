@@ -105,6 +105,9 @@ async def _on_new_message(event, user_id: int):
         if not text.strip():
             return
 
+        if telegram_broadcast.is_own_broadcast(text):
+            return
+
         parsed = signal_parser.parse_signal(text)
         if not looks_like_signal(parsed):
             return

@@ -8,12 +8,23 @@ that's a deliberate choice the user made; the min_score gate exists specifically
 weak signals from spamming the target channel.
 """
 import asyncio
+import re
 from datetime import datetime
 
 from app import db
 from app.telegram_client import get_client, get_active_loop
 
 MONTH_ABBR = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+
+_OWN_SCORE_LINE = re.compile(r"^Score:\s*[\d.]+\s*·", re.MULTILINE)
+
+
+def is_own_broadcast(text: str) -> bool:
+    """True if this message is one this app posted itself (format_signal_message's signature
+    "Score: 72.6 · Strong setup" line). The broadcast target is usually also a monitored channel,
+    so without this the listener re-ingested every broadcast as a brand-new signal."""
+    return bool(_OWN_SCORE_LINE.search(text or ""))
 
 
 def _fmt_num(n):
