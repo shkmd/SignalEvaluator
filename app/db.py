@@ -963,10 +963,10 @@ def update_chartink_scan(
 CHARTINK_HITS_KEPT = 50
 
 
-def record_chartink_hit(user_id: int, method: str, scan_name: str, stocks_count: int, outcome: str) -> None:
+def record_chartink_hit(user_id: int, method: str, scan_name: str, stocks_count: int, outcome: str) -> int:
     conn = _conn()
     try:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO chartink_webhook_hits (user_id, received_at, method, scan_name, stocks_count, outcome)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -981,6 +981,16 @@ def record_chartink_hit(user_id: int, method: str, scan_name: str, stocks_count:
             """,
             (user_id, user_id, CHARTINK_HITS_KEPT),
         )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_chartink_hit_outcome(hit_id: int, outcome: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE chartink_webhook_hits SET outcome = ? WHERE id = ?", (outcome, hit_id))
         conn.commit()
     finally:
         conn.close()

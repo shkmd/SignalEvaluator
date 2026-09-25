@@ -3,7 +3,7 @@ import secrets
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Depends, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr
@@ -510,30 +510,41 @@ def telegram_toggle_channel(channel_id: int, req: ChannelToggleRequest, user_id:
 
 # ---- Chartink ----
 
+def _process_chartink_hit(hit_id: int, token: str, payload: dict, raw_count: int) -> None:
+    """Runs after the webhook has already been answered -- scoring every stock (prices, news,
+    technicals) takes several seconds, and Chartink's sender gives up long before that (its "Test
+    webhook" button reported failure while we were still working on a request we'd in fact
+    received and processed correctly)."""
+    try:
+        result = chartink.process_webhook(token, payload)
+        if result.get("reason"):
+            outcome = result["reason"]
+        elif raw_count and not chartink._parse_stocks(payload):
+            outcome = "ignored: placeholder symbols (Chartink's own test sample)"
+        else:
+            outcome = f"{result.get('processed', 0)} new signal(s) created"
+    except Exception as e:
+        outcome = f"error: {e}"
+    db.update_chartink_hit_outcome(hit_id, outcome)
+
+
 @app.post("/api/chartink/webhook/{token}")
-async def chartink_webhook(token: str, request: Request):
+async def chartink_webhook(token: str, request: Request, background_tasks: BackgroundTasks):
     # Public endpoint by necessity -- Chartink can't send our session cookie or a custom auth
-    # header, so the token embedded in the URL itself is the only credential. Never raise a
-    # 500 for a per-symbol processing failure (network hiccup, unresolvable symbol, etc.) --
-    # Chartink has no meaningful retry/backoff UI, so a hard failure just silently loses that
-    # alert. Only a bad/revoked token is worth a non-200. The body is parsed by hand (JSON, else
-    # form-encoded) rather than via a Pydantic model, which would 422 on any unexpected shape.
+    # header, so the token embedded in the URL itself is the only credential. Only a bad/revoked
+    # token is worth a non-200; the body is parsed by hand (JSON, else form-encoded) rather than
+    # via a Pydantic model, which would 422 on any unexpected shape. Answers immediately and
+    # does the actual signal processing in the background -- see _process_chartink_hit.
     user_id = db.get_user_id_by_chartink_token(token)
     if not user_id:
         raise HTTPException(status_code=404, detail="Unknown or revoked Chartink webhook token")
 
     payload = chartink.parse_body(await request.body())
-    stocks_count = len(chartink._parse_stocks(payload))
+    raw_count = chartink.count_raw_stocks(payload)
     scan_name = payload.get("scan_name") or payload.get("scan_url")
-    try:
-        # process_webhook does blocking network calls (prices, news) per stock
-        result = await asyncio.to_thread(chartink.process_webhook, token, payload)
-        outcome = result.get("reason") or f"{result.get('processed', 0)} new signal(s) created"
-    except Exception as e:
-        result = {"processed": 0, "error": str(e)}
-        outcome = f"error: {e}"
-    db.record_chartink_hit(user_id, "POST", scan_name, stocks_count, outcome)
-    return result
+    hit_id = db.record_chartink_hit(user_id, "POST", scan_name, raw_count, "processing...")
+    background_tasks.add_task(_process_chartink_hit, hit_id, token, payload, raw_count)
+    return {"received": raw_count}
 
 
 @app.get("/api/chartink/webhook/{token}")

@@ -13,6 +13,7 @@ the stock triggered at, SL/target sized off ATR (a scan doesn't carry today's hi
 an F&O Scanner snapshot does, but 14-day ATR is fetched anyway as part of scoring).
 """
 import json
+import re
 from datetime import datetime, timezone
 from urllib.parse import parse_qs
 
@@ -40,6 +41,15 @@ def parse_body(raw: bytes) -> dict:
     return {k: v[0] for k, v in parse_qs(text).items() if v}
 
 
+# A real NSE symbol never contains a space. Chartink's own "Test webhook" button POSTs
+# placeholder symbols ("SYMBOL 1", "SYMBOL 2", ...) that would otherwise become junk signals.
+_VALID_SYMBOL = re.compile(r"^[A-Z0-9&\-]{1,20}$")
+
+
+def count_raw_stocks(payload: dict) -> int:
+    return len([s for s in (payload.get("stocks") or "").split(",") if s.strip()])
+
+
 def _parse_stocks(payload: dict) -> list:
     stocks = [s.strip().upper() for s in (payload.get("stocks") or "").split(",") if s.strip()]
     prices_raw = [p.strip() for p in (payload.get("trigger_prices") or "").split(",") if p.strip()]
@@ -54,7 +64,7 @@ def _parse_stocks(payload: dict) -> list:
     # rather than mis-pairing a stock with the wrong price.
     if len(prices) != len(stocks):
         prices = [None] * len(stocks)
-    return list(zip(stocks, prices))
+    return [(sym, px) for sym, px in zip(stocks, prices) if _VALID_SYMBOL.match(sym)]
 
 
 def _build_signal(symbol: str, resolved_symbol: str, bullish: bool, entry: float, atr: float = None) -> dict:

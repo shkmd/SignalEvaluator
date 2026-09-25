@@ -75,3 +75,14 @@ def test_parse_body_empty_and_garbage_never_raise():
     assert parse_body(b"") == {}
     assert parse_body(b"   ") == {}
     assert parse_body(b"\xff\xfe not anything") == {}
+
+
+# ---- placeholder symbols from Chartink's own "Test webhook" sample payload ----
+def test_placeholder_symbols_are_ignored():
+    payload = {"stocks": "SYMBOL 1,SYMBOL 2,SYMBOL 3", "trigger_prices": "2500,600,3400"}
+    assert _parse_stocks(payload) == []
+
+
+def test_real_symbols_with_punctuation_still_pass_and_stay_aligned_with_prices():
+    payload = {"stocks": "M&M,BAJAJ-AUTO,SYMBOL 9,TCS", "trigger_prices": "1,2,3,4"}
+    assert _parse_stocks(payload) == [("M&M", 1.0), ("BAJAJ-AUTO", 2.0), ("TCS", 4.0)]
