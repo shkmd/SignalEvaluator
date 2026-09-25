@@ -38,6 +38,15 @@ _HEADER_RE = re.compile(r"^[ \t]*([A-Z&\-]{2,20})[ \t]+(\d+(?:\.\d+)?)[ \t]*(CE|
 _ACTION_SYMBOL_RE = re.compile(r"\b(BUY|SELL)\s+([A-Z&\-]{2,20})\s*(\d+(?:\.\d+)?)?\s*(CE|PE)?\b")
 
 
+# Currency markers between a keyword and its number ("ABOVE ₹170", "SL Rs. 160", "TGT INR 230").
+# Rs/INR are only stripped when a digit follows, so a symbol that merely starts with those
+# letters is left alone.
+_CURRENCY_RE = re.compile(r"₹|\bRS\.?\s*(?=\d)|\bINR\s*(?=\d)")
+
+# A line that starts with SL / stop loss / target -- levels, not the entry.
+_LEVEL_LINE_RE = re.compile(r"\s*(?:TGTS?|TRGTS?|TARGETS?|SL|STOP\s*LOSS)\b")
+
+
 def _to_float(s):
     try:
         return float(s)
@@ -47,7 +56,7 @@ def _to_float(s):
 
 def parse_signal(raw_text: str) -> dict:
     text = raw_text.strip()
-    upper = text.upper()
+    upper = _CURRENCY_RE.sub("", text.upper())
 
     result = {
         "raw_text": text,
@@ -101,8 +110,12 @@ def parse_signal(raw_text: str) -> dict:
     else:
         result["parse_warnings"].append("Could not find a 'SYMBOL [STRIKE] [CE/PE]' or 'BUY/SELL SYMBOL' pattern.")
 
+    # The entry is searched for only on lines that aren't the SL/target lines: a dash-separated
+    # target line ("TGT 182-200-230") otherwise looks exactly like an entry range "182-200".
+    entry_text = "\n".join(l for l in upper.split("\n") if not _LEVEL_LINE_RE.match(l))
+
     # Entry range: "Around 13-14", "Range 13-14", "13-14 Range"
-    m = re.search(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*(?:RANGE)?", upper)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*(?:RANGE)?", entry_text)
     if m:
         lo, hi = _to_float(m.group(1)), _to_float(m.group(2))
         if lo is not None and hi is not None and lo <= hi:
@@ -110,8 +123,8 @@ def parse_signal(raw_text: str) -> dict:
 
     # "BUY ABOVE 130" / "BUY NEAR 130" / "SELL BELOW 90" / "BUY AT 130" -- a single entry price.
     if result["entry_low"] is None:
-        m = re.search(r"\b(?:ABOVE|ABV|NEAR|AROUND|BELOW)\s*[:\-]?\s*(\d+(?:\.\d+)?)", upper) or re.search(
-            r"\b(?:BUY|SELL)\s+(?:AT|@|ON)\s*(\d+(?:\.\d+)?)", upper
+        m = re.search(r"\b(?:ABOVE|ABV|NEAR|AROUND|BELOW)\s*[:\-]?\s*(\d+(?:\.\d+)?)", entry_text) or re.search(
+            r"\b(?:BUY|SELL)\s+(?:AT|@|ON)\s*(\d+(?:\.\d+)?)", entry_text
         )
         if m:
             result["entry_low"] = result["entry_high"] = _to_float(m.group(1))
@@ -131,13 +144,13 @@ def parse_signal(raw_text: str) -> dict:
         result["parse_warnings"].append("No stop-loss (SL) found.")
 
     # Target(s) 16/18/20/24/30+
-    m = re.search(r"\b(?:TARGETS?|TGTS?|TRGTS?)\b\s*[:\-]?\s*([\d/\.\+\s,]+)", upper)
+    m = re.search(r"\b(?:TARGETS?|TGTS?|TRGTS?)\b\s*[:\-]?\s*([\d/\.\+\s,\-]+)", upper)
     if m:
         chunk = m.group(1).strip()
         if chunk.endswith("+"):
             result["targets_open_ended"] = True
             chunk = chunk.rstrip("+ ").strip()
-        parts = [p for p in re.split(r"[/,]", chunk) if p.strip()]
+        parts = [p for p in re.split(r"[/,\-]", chunk) if p.strip()]
         targets = []
         for p in parts:
             v = _to_float(p.strip().rstrip("+"))

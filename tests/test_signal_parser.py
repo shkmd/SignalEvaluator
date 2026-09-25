@@ -59,3 +59,32 @@ def test_own_broadcast_message_is_recognised_so_it_is_not_reingested():
 def test_a_normal_channel_message_is_not_mistaken_for_our_own():
     assert not is_own_broadcast("NIFTY 23200 CE\n\nBUY ABOVE 130\n\nTGT 140/156/180+\n\nSL 110")
     assert not is_own_broadcast("")
+
+
+# ---- rupee-sign layout with dash-separated targets (the next channel format the user will get) ----
+def test_action_first_pe_call_with_rupee_signs_and_dash_targets():
+    p = parse_signal("BUY NIFTY 23200 PE\n\nABOVE ₹170\nSL ₹160\nTGT ₹182-₹200- ₹230")
+    assert p["symbol"] == "NIFTY"
+    assert (p["instrument"], p["strike"], p["action"]) == ("PE", 23200.0, "buy")
+    assert p["entry_low"] == p["entry_high"] == 170.0
+    assert p["sl"] == 160.0
+    assert p["targets"] == [182.0, 200.0, 230.0]
+
+
+def test_dash_separated_targets_are_not_mistaken_for_an_entry_range():
+    # "182-200" must never become entry_low/entry_high
+    p = parse_signal("NIFTY 23200 CE\nBUY ABOVE 170\nSL 160\nTGT 182-200-230")
+    assert p["entry_low"] == p["entry_high"] == 170.0
+    assert p["targets"] == [182.0, 200.0, 230.0]
+
+
+def test_rs_and_inr_prefixes_and_a_symbol_starting_with_rs_are_handled():
+    p = parse_signal("BUY RSYSTEMS\nBUY ABOVE Rs. 170\nSL INR 160\nTarget Rs 182/200")
+    assert p["symbol"] == "RSYSTEMS"  # not mangled into "YSTEMS"
+    assert (p["entry_low"], p["sl"], p["targets"]) == (170.0, 160.0, [182.0, 200.0])
+
+
+def test_real_entry_range_still_works_alongside_level_lines():
+    p = parse_signal("BUY RELIANCE\nRange 2900-2920\nSL 2850\nTGT 2990-3050")
+    assert (p["entry_low"], p["entry_high"]) == (2900.0, 2920.0)
+    assert p["targets"] == [2990.0, 3050.0]
