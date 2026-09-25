@@ -346,6 +346,20 @@ CREATE TABLE IF NOT EXISTS chartink_scans (
     UNIQUE(user_id, scan_url)
 );
 
+-- Every request that reaches a user's Chartink webhook (test pings and real alerts alike), so
+-- "why didn't my alert show up" is answerable from the app itself -- server logs only keep a
+-- few hundred lines, far too short to prove that nothing ever arrived.
+CREATE TABLE IF NOT EXISTS chartink_webhook_hits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    received_at TEXT NOT NULL,
+    method TEXT NOT NULL,
+    scan_name TEXT,
+    stocks_count INTEGER,
+    outcome TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 -- Confluence auto-trade: only takes a position when the F&O Scanner and a Chartink scan both
 -- independently flag the same symbol + direction within window_minutes of each other. Always
 -- paper (see app/confluence.py) -- like the other per-source auto-trade toggles, it exists to
@@ -942,6 +956,43 @@ def update_chartink_scan(
         )
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+CHARTINK_HITS_KEPT = 50
+
+
+def record_chartink_hit(user_id: int, method: str, scan_name: str, stocks_count: int, outcome: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO chartink_webhook_hits (user_id, received_at, method, scan_name, stocks_count, outcome)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, datetime.now(timezone.utc).isoformat(), method, scan_name, stocks_count, outcome),
+        )
+        conn.execute(
+            """
+            DELETE FROM chartink_webhook_hits WHERE user_id = ? AND id NOT IN (
+                SELECT id FROM chartink_webhook_hits WHERE user_id = ? ORDER BY id DESC LIMIT ?
+            )
+            """,
+            (user_id, user_id, CHARTINK_HITS_KEPT),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_chartink_hits(user_id: int, limit: int = 10) -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM chartink_webhook_hits WHERE user_id = ? ORDER BY id DESC LIMIT ?", (user_id, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

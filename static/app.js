@@ -1388,6 +1388,7 @@ async function loadChartinkTab() {
   const data = await res.json();
   $("chartink-webhook-url").value = data.webhook_url;
   renderChartinkScans(data.scans || []);
+  renderChartinkHits(data.recent_hits || []);
 
   const confRes = await fetch("/api/confluence/settings");
   const conf = await confRes.json();
@@ -1418,6 +1419,30 @@ $("btn-save-confluence-settings").onclick = async () => {
   }
 };
 
+function escapeHtml(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function renderChartinkHits(hits) {
+  const tbody = document.querySelector("#chartink-hits-table tbody");
+  tbody.innerHTML = "";
+  if (hits.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">Nothing has reached this webhook yet.</td></tr>`;
+    return;
+  }
+  hits.forEach((h) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="color:var(--muted);font-size:12px">${escapeHtml(new Date(h.received_at).toLocaleString())}</td>
+      <td>${escapeHtml(h.method)}</td>
+      <td>${escapeHtml(h.scan_name || "-")}</td>
+      <td>${escapeHtml(h.stocks_count ?? 0)}</td>
+      <td>${escapeHtml(h.outcome || "-")}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
 function renderChartinkScans(scans) {
   const tbody = document.querySelector("#chartink-scans-table tbody");
   tbody.innerHTML = "";
@@ -1429,7 +1454,7 @@ function renderChartinkScans(scans) {
     const tr = document.createElement("tr");
     const lastTriggered = s.last_triggered_at ? new Date(s.last_triggered_at).toLocaleString() : "-";
     tr.innerHTML = `
-      <td>${s.scan_name || s.scan_url}</td>
+      <td>${escapeHtml(s.scan_name || s.scan_url)}</td>
       <td>
         <select data-field="direction" data-id="${s.id}">
           <option value="bullish" ${s.direction === "bullish" ? "selected" : ""}>Bullish (buy)</option>

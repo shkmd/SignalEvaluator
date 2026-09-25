@@ -51,3 +51,27 @@ def test_build_signal_floors_risk_when_atr_missing_or_zero():
     # MIN_RISK_PCT floor = 1000 * 0.005 = 5.0 risk
     assert signal["sl"] == 995.0
     assert signal["targets"] == [1010.0]
+
+
+# ---- parse_body: tolerate whatever Content-Type the sender actually uses ----
+from app.chartink import parse_body
+
+
+def test_parse_body_json():
+    raw = b'{"stocks":"RELIANCE,TCS","trigger_prices":"2950.5,4120","scan_name":"S"}'
+    assert parse_body(raw) == {"stocks": "RELIANCE,TCS", "trigger_prices": "2950.5,4120", "scan_name": "S"}
+
+
+def test_parse_body_form_encoded_fallback():
+    raw = b"stocks=RELIANCE%2CTCS&trigger_prices=2950.5%2C4120&scan_name=My+Scan"
+    assert parse_body(raw) == {"stocks": "RELIANCE,TCS", "trigger_prices": "2950.5,4120", "scan_name": "My Scan"}
+
+
+def test_parse_body_coerces_non_string_json_values():
+    assert parse_body(b'{"stocks":"TCS","trigger_prices":4120.5}')["trigger_prices"] == "4120.5"
+
+
+def test_parse_body_empty_and_garbage_never_raise():
+    assert parse_body(b"") == {}
+    assert parse_body(b"   ") == {}
+    assert parse_body(b"\xff\xfe not anything") == {}

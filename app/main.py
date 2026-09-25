@@ -510,26 +510,30 @@ def telegram_toggle_channel(channel_id: int, req: ChannelToggleRequest, user_id:
 
 # ---- Chartink ----
 
-class ChartinkWebhookPayload(BaseModel):
-    stocks: str = ""
-    trigger_prices: Optional[str] = None
-    triggered_at: Optional[str] = None
-    scan_name: Optional[str] = None
-    scan_url: Optional[str] = None
-    alert_name: Optional[str] = None
-
-
 @app.post("/api/chartink/webhook/{token}")
-def chartink_webhook(token: str, payload: ChartinkWebhookPayload):
+async def chartink_webhook(token: str, request: Request):
     # Public endpoint by necessity -- Chartink can't send our session cookie or a custom auth
     # header, so the token embedded in the URL itself is the only credential. Never raise a
     # 500 for a per-symbol processing failure (network hiccup, unresolvable symbol, etc.) --
     # Chartink has no meaningful retry/backoff UI, so a hard failure just silently loses that
-    # alert. Only a bad/revoked token is worth a non-200.
+    # alert. Only a bad/revoked token is worth a non-200. The body is parsed by hand (JSON, else
+    # form-encoded) rather than via a Pydantic model, which would 422 on any unexpected shape.
+    user_id = db.get_user_id_by_chartink_token(token)
+    if not user_id:
+        raise HTTPException(status_code=404, detail="Unknown or revoked Chartink webhook token")
+
+    payload = chartink.parse_body(await request.body())
+    stocks_count = len(chartink._parse_stocks(payload))
+    scan_name = payload.get("scan_name") or payload.get("scan_url")
     try:
-        return chartink.process_webhook(token, payload.model_dump())
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        # process_webhook does blocking network calls (prices, news) per stock
+        result = await asyncio.to_thread(chartink.process_webhook, token, payload)
+        outcome = result.get("reason") or f"{result.get('processed', 0)} new signal(s) created"
+    except Exception as e:
+        result = {"processed": 0, "error": str(e)}
+        outcome = f"error: {e}"
+    db.record_chartink_hit(user_id, "POST", scan_name, stocks_count, outcome)
+    return result
 
 
 @app.get("/api/chartink/webhook/{token}")
@@ -538,8 +542,10 @@ def chartink_webhook_ping(token: str):
     # check reachability -- real alerts always POST the actual stocks/trigger_prices data (see
     # chartink_webhook above). This just confirms the token is valid so that test succeeds;
     # it never creates a signal.
-    if not db.get_user_id_by_chartink_token(token):
+    user_id = db.get_user_id_by_chartink_token(token)
+    if not user_id:
         raise HTTPException(status_code=404, detail="Unknown or revoked Chartink webhook token")
+    db.record_chartink_hit(user_id, "GET", None, 0, "test ping OK")
     return {"ok": True}
 
 
@@ -561,7 +567,11 @@ def _external_origin(request: Request) -> str:
 def chartink_settings(request: Request, user_id: int = Depends(current_user_id)):
     token = db.get_or_create_chartink_token(user_id)
     origin = _external_origin(request)
-    return {"webhook_url": f"{origin}/api/chartink/webhook/{token}", "scans": db.list_chartink_scans(user_id)}
+    return {
+        "webhook_url": f"{origin}/api/chartink/webhook/{token}",
+        "scans": db.list_chartink_scans(user_id),
+        "recent_hits": db.list_chartink_hits(user_id),
+    }
 
 
 @app.post("/api/chartink/regenerate-token")

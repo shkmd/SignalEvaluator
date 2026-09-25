@@ -775,6 +775,21 @@ Target 16/18/20/24/30+"></textarea>
       </div>
 
       <div class="panel">
+        <h2>Recent webhook deliveries</h2>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:4px">
+          Every request that reaches your webhook URL, newest first -- including Chartink's
+          "Test webhook" ping. If a scan matched on Chartink but nothing shows here, the alert
+          never reached us (check the URL saved in the alert, and its Duplicates setting).
+        </div>
+        <table id="chartink-hits-table">
+          <thead>
+            <tr><th>Received</th><th>Method</th><th>Scan</th><th>Stocks</th><th>Result</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
         <div class="channels-header">
           <h2 style="margin:0">Scans</h2>
         </div>

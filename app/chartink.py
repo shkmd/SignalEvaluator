@@ -12,13 +12,32 @@ every Chartink-sourced signal is an equity ("EQ") signal: entry = the price Char
 the stock triggered at, SL/target sized off ATR (a scan doesn't carry today's high/low the way
 an F&O Scanner snapshot does, but 14-day ATR is fetched anyway as part of scoring).
 """
+import json
 from datetime import datetime, timezone
+from urllib.parse import parse_qs
 
 from app import db, scoring, trading, telegram_broadcast, alerts, confluence
 from app import technicals, news as news_mod, screener, stock_score
 
 MIN_RISK_PCT = 0.005  # floor so a near-zero ATR (illiquid/newly-listed stock) never yields ~zero risk
 ATR_RISK_MULT = 1.5
+
+
+def parse_body(raw: bytes) -> dict:
+    """Chartink's documented payload is JSON, but nothing here should depend on the sender's
+    Content-Type being what we expect -- a strict Pydantic body model would reject anything else
+    with a 422 and the alert would silently vanish from the sender's side. Tries JSON first, then
+    falls back to a form-encoded body; every value is coerced to a string."""
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return {k: str(v) for k, v in data.items() if v is not None}
+    except ValueError:
+        pass
+    return {k: v[0] for k, v in parse_qs(text).items() if v}
 
 
 def _parse_stocks(payload: dict) -> list:
