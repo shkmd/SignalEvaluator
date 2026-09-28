@@ -1460,13 +1460,23 @@ function renderChartinkHits(hits) {
   }
   hits.forEach((h) => {
     const tr = document.createElement("tr");
+    const links = (h.signals || [])
+      .map((s) => `<a href="#" class="chartink-hit-signal-link" data-signal-id="${s.signal_id}">#${s.signal_id} ${escapeHtml(s.symbol)}</a>`)
+      .join(", ");
+    const resultHtml = links ? `${escapeHtml(h.outcome || "")}: ${links}` : escapeHtml(h.outcome || "-");
     tr.innerHTML = `
       <td style="color:var(--muted);font-size:12px">${escapeHtml(new Date(h.received_at).toLocaleString())}</td>
       <td>${escapeHtml(h.method)}</td>
       <td>${escapeHtml(h.scan_name || "-")}</td>
       <td>${escapeHtml(h.stocks_count ?? 0)}</td>
-      <td>${escapeHtml(h.outcome || "-")}</td>
+      <td>${resultHtml}</td>
     `;
+    tr.querySelectorAll(".chartink-hit-signal-link").forEach((a) => {
+      a.onclick = (e) => {
+        e.preventDefault();
+        openSignalDetail(Number(a.dataset.signalId));
+      };
+    });
     tbody.appendChild(tr);
   });
 }

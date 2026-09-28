@@ -585,8 +585,10 @@ def _process_chartink_hit(hit_id: int, token: str, payload: dict, raw_count: int
     technicals) takes several seconds, and Chartink's sender gives up long before that (its "Test
     webhook" button reported failure while we were still working on a request we'd in fact
     received and processed correctly)."""
+    signals = []
     try:
         result = chartink.process_webhook(token, payload)
+        signals = result.get("signals") or []
         if result.get("reason"):
             outcome = result["reason"]
         elif raw_count and not chartink._parse_stocks(payload):
@@ -595,7 +597,7 @@ def _process_chartink_hit(hit_id: int, token: str, payload: dict, raw_count: int
             outcome = f"{result.get('processed', 0)} new signal(s) created"
     except Exception as e:
         outcome = f"error: {e}"
-    db.update_chartink_hit_outcome(hit_id, outcome)
+    db.update_chartink_hit_outcome(hit_id, outcome, signals)
 
 
 @app.post("/api/chartink/webhook/{token}")

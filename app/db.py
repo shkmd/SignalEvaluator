@@ -461,6 +461,11 @@ def init_db():
             conn.execute("ALTER TABLE signals ADD COLUMN lot_size INTEGER")
             conn.commit()
 
+        hits_cols = {c["name"] for c in conn.execute("PRAGMA table_info(chartink_webhook_hits)").fetchall()}
+        if "signal_ids" not in hits_cols:
+            conn.execute("ALTER TABLE chartink_webhook_hits ADD COLUMN signal_ids TEXT")
+            conn.commit()
+
         sss_cols = {c["name"] for c in conn.execute("PRAGMA table_info(scanner_signal_settings)").fetchall()}
         if "strike_preference" not in sss_cols:
             conn.execute("ALTER TABLE scanner_signal_settings ADD COLUMN strike_preference TEXT NOT NULL DEFAULT 'ATM'")
@@ -1029,10 +1034,16 @@ def record_chartink_hit(user_id: int, method: str, scan_name: str, stocks_count:
         conn.close()
 
 
-def update_chartink_hit_outcome(hit_id: int, outcome: str) -> None:
+def update_chartink_hit_outcome(hit_id: int, outcome: str, signals: list = None) -> None:
+    """`signals`: the [{"symbol", "signal_id"}, ...] list process_webhook() returned, so the
+    Chartink tab can link a delivery straight to the signal(s) it created instead of just
+    saying how many."""
     conn = _conn()
     try:
-        conn.execute("UPDATE chartink_webhook_hits SET outcome = ? WHERE id = ?", (outcome, hit_id))
+        conn.execute(
+            "UPDATE chartink_webhook_hits SET outcome = ?, signal_ids = ? WHERE id = ?",
+            (outcome, json.dumps(signals) if signals else None, hit_id),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -1044,7 +1055,12 @@ def list_chartink_hits(user_id: int, limit: int = 10) -> list:
         rows = conn.execute(
             "SELECT * FROM chartink_webhook_hits WHERE user_id = ? ORDER BY id DESC LIMIT ?", (user_id, limit)
         ).fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["signals"] = json.loads(d.pop("signal_ids") or "[]")
+            result.append(d)
+        return result
     finally:
         conn.close()
 
