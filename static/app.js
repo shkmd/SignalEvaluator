@@ -1688,6 +1688,7 @@ async function loadPositions() {
     const riskBits = [];
     if (o.trailing_enabled) riskBits.push(`Trail ${o.trail_pct}%`);
     if (o.lock_trigger_pct) riskBits.push(`Lock@${o.lock_trigger_pct}%→${o.lock_pct}%${o.profit_locked ? " ✓" : ""}`);
+    if (o.lock_trigger_amount) riskBits.push(`Lock@₹${o.lock_trigger_amount}→₹${o.lock_amount}${o.profit_locked ? " ✓" : ""}`);
     const riskLabel = riskBits.length ? riskBits.join(", ") : "Off";
 
     const tr = document.createElement("tr");
@@ -1761,6 +1762,8 @@ function openRiskModal(order) {
   $("risk-trail-pct").value = order.trail_pct ?? "";
   $("risk-lock-trigger-pct").value = order.lock_trigger_pct ?? "";
   $("risk-lock-pct").value = order.lock_pct ?? "";
+  $("risk-lock-trigger-amount").value = order.lock_trigger_amount ?? "";
+  $("risk-lock-amount").value = order.lock_amount ?? "";
   $("risk-settings-status").textContent = "";
   $("risk-modal-backdrop").classList.remove("hidden");
   $("risk-modal").classList.remove("hidden");
@@ -1793,6 +1796,12 @@ $("btn-save-risk-settings").onclick = async () => {
         trail_pct: trailPct,
         lock_trigger_pct: $("risk-lock-trigger-pct").value ? parseFloat($("risk-lock-trigger-pct").value) : null,
         lock_pct: $("risk-lock-pct").value ? parseFloat($("risk-lock-pct").value) : null,
+        lock_trigger_amount: $("risk-lock-trigger-amount").value ? parseFloat($("risk-lock-trigger-amount").value) : null,
+        lock_amount: $("risk-lock-amount").value
+          ? parseFloat($("risk-lock-amount").value)
+          : $("risk-lock-trigger-amount").value
+          ? parseFloat($("risk-lock-trigger-amount").value) // blank "Lock at ₹" locks the full triggered amount
+          : null,
       }),
     });
     if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
@@ -2169,6 +2178,8 @@ async function loadAutoTradeSettings() {
   $("at-lock-enabled").checked = !!s.default_lock_enabled;
   $("at-lock-trigger-pct").value = s.default_lock_trigger_pct ?? 5;
   $("at-lock-pct").value = s.default_lock_pct ?? 2;
+  $("at-lock-trigger-amount").value = s.default_lock_trigger_amount ?? "";
+  $("at-lock-amount").value = s.default_lock_amount ?? "";
   $("at-live-auto-exit").checked = !!s.live_auto_exit_enabled;
   updateLiveWarning();
 }
@@ -2201,6 +2212,12 @@ $("btn-save-at-settings").onclick = async () => {
     default_lock_enabled: $("at-lock-enabled").checked,
     default_lock_trigger_pct: parseFloat($("at-lock-trigger-pct").value) || 5,
     default_lock_pct: parseFloat($("at-lock-pct").value) || 0,
+    default_lock_trigger_amount: $("at-lock-trigger-amount").value ? parseFloat($("at-lock-trigger-amount").value) : null,
+    default_lock_amount: $("at-lock-amount").value
+      ? parseFloat($("at-lock-amount").value)
+      : $("at-lock-trigger-amount").value
+      ? parseFloat($("at-lock-trigger-amount").value) // blank "lock at ₹" means lock the full triggered amount
+      : null,
     live_auto_exit_enabled: $("at-live-auto-exit").checked,
   };
   statusEl.textContent = "Saving…";

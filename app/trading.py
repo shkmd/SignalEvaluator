@@ -211,6 +211,8 @@ def place_paper_order(user_id: int, signal_id: int, signal: dict, evaluation: di
             "trail_pct": risk_defaults.get("default_trail_pct"),
             "lock_trigger_pct": risk_defaults.get("default_lock_trigger_pct") if risk_defaults.get("default_lock_enabled") else None,
             "lock_pct": risk_defaults.get("default_lock_pct") if risk_defaults.get("default_lock_enabled") else None,
+            "lock_trigger_amount": risk_defaults.get("default_lock_trigger_amount") if risk_defaults.get("default_lock_enabled") else None,
+            "lock_amount": risk_defaults.get("default_lock_amount") if risk_defaults.get("default_lock_enabled") else None,
         },
     )
     return {"placed": True, "order_id": order_id, "mode": "paper", "entry_price": entry_price, "quantity": quantity}
@@ -236,11 +238,12 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
     signal's strike/expiry can go stale between when it was scored and when this actually
     fires.
 
-    Only places the entry order. SL/target are recorded on the order row for the user to
-    manage -- automatic bracket-style exit isn't wired up yet, unlike paper mode where
-    monitor_open_positions() auto-closes on SL/target hit. For a live position,
-    monitor_open_positions() only sends an SL-proximity alert; closing it (manually, from
-    Positions) is what places the real offsetting order -- see close_order().
+    Only places the entry order. SL/target are recorded on the order row and, same as paper,
+    get the user's Risk Manager defaults (trailing stop / profit-lock) applied so
+    monitor_open_positions() keeps tightening the tracked SL as price moves favorably. Whether
+    a hit then places a REAL offsetting order automatically depends on live_auto_exit_enabled
+    (off by default) -- if it's off, a hit only sends an SL-proximity alert and closing the
+    position (from Positions) is what places the real offsetting order -- see close_order().
     """
     if signal_id and db.order_exists_for_signal(user_id, signal_id):
         return {"placed": False, "reason": "An order already exists for this signal."}
@@ -268,6 +271,7 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
     base_quantity = size_for_reliability(user_id, signal_id, settings["quantity"])
     instrument = signal.get("instrument", "EQ")
     targets = signal.get("targets") or []
+    risk_defaults = db.get_auto_trade_settings(user_id)
 
     if instrument in ("CE", "PE"):
         strike = signal.get("strike")
@@ -309,6 +313,12 @@ def place_live_order(user_id: int, signal_id: int, signal: dict, evaluation: dic
             "target": min(targets) if targets and side == "BUY" else (max(targets) if targets else None),
             "broker": broker_name,
             "broker_order_id": broker_order_id,
+            "trailing_enabled": risk_defaults.get("default_trailing_enabled"),
+            "trail_pct": risk_defaults.get("default_trail_pct"),
+            "lock_trigger_pct": risk_defaults.get("default_lock_trigger_pct") if risk_defaults.get("default_lock_enabled") else None,
+            "lock_pct": risk_defaults.get("default_lock_pct") if risk_defaults.get("default_lock_enabled") else None,
+            "lock_trigger_amount": risk_defaults.get("default_lock_trigger_amount") if risk_defaults.get("default_lock_enabled") else None,
+            "lock_amount": risk_defaults.get("default_lock_amount") if risk_defaults.get("default_lock_enabled") else None,
         },
     )
     return {"placed": True, "order_id": order_id, "mode": "live", "entry_price": entry_price, "broker_order_id": broker_order_id}
@@ -460,15 +470,20 @@ def apply_risk_management(order: dict, current_price: float) -> dict:
     flag -- the caller applies these to the order dict for THIS tick's hit-check even when
     changed is False, so callers don't need their own separate fallback logic.
 
-    - Profit lock (one-time ratchet): once unrealized profit crosses lock_trigger_pct, SL jumps
-      to the level that locks in lock_pct profit -- fires once (profit_locked), not repeatedly.
+    - Profit lock (one-time ratchet): once unrealized profit crosses lock_trigger_pct (% of
+      entry) and/or lock_trigger_amount (₹, on the whole position -- quantity included), SL
+      jumps to the level that locks in lock_pct / lock_amount profit -- fires once
+      (profit_locked), not repeatedly. A position can have either, both, or neither configured;
+      whichever crosses first fires, and if both fire on the same tick the tighter of the two
+      resulting SLs wins (same "never loosens" rule as below).
     - Trailing stop (continuous): once trailing_enabled, SL follows the best price seen since
       entry (peak_price) by trail_pct, re-evaluated every tick.
-    - Combined, and either alone: SL only ever tightens (moves toward locking in more profit),
-      never loosens, regardless of which rule proposed the move -- the better of the two wins.
+    - Combined, and any subset alone: SL only ever tightens (moves toward locking in more
+      profit), never loosens, regardless of which rule proposed the move -- the better wins.
     """
     is_long = order["side"] == "buy"
     entry = order.get("entry_price")
+    qty = order.get("quantity")
     sl = order.get("sl")
     peak_price = order.get("peak_price") or entry
     profit_locked = bool(order.get("profit_locked"))
@@ -483,12 +498,21 @@ def apply_risk_management(order: dict, current_price: float) -> dict:
         def _better(candidate):
             return candidate is not None and (sl is None or (candidate > sl if is_long else candidate < sl))
 
-        if not profit_locked and order.get("lock_trigger_pct") and order.get("lock_pct") is not None:
-            profit_pct = ((current_price - entry) / entry * 100) if is_long else ((entry - current_price) / entry * 100)
-            if profit_pct >= order["lock_trigger_pct"]:
-                lock_sl = entry * (1 + order["lock_pct"] / 100) if is_long else entry * (1 - order["lock_pct"] / 100)
+        if not profit_locked:
+            candidates = []
+            if order.get("lock_trigger_pct") and order.get("lock_pct") is not None:
+                profit_pct = ((current_price - entry) / entry * 100) if is_long else ((entry - current_price) / entry * 100)
+                if profit_pct >= order["lock_trigger_pct"]:
+                    candidates.append(entry * (1 + order["lock_pct"] / 100) if is_long else entry * (1 - order["lock_pct"] / 100))
+            if order.get("lock_trigger_amount") and order.get("lock_amount") is not None and qty:
+                total_profit = (current_price - entry) * qty if is_long else (entry - current_price) * qty
+                if total_profit >= order["lock_trigger_amount"]:
+                    points = order["lock_amount"] / qty
+                    candidates.append(entry + points if is_long else entry - points)
+            if candidates:
                 profit_locked = True
                 changed = True
+                lock_sl = max(candidates) if is_long else min(candidates)  # the tighter lock of the two
                 if _better(lock_sl):
                     sl = round(lock_sl, 2)
 
@@ -563,6 +587,15 @@ def monitor_open_positions() -> list:
         if not price_info["available"]:
             continue
         price = price_info["price"]
+
+        # Same Risk Manager as paper positions -- this only moves the SL this app *tracks* for
+        # the live position; it never places a broker order by itself. A hit against the
+        # tightened SL below only places a real exit if live_auto_exit_enabled is also on (see
+        # the check right after), same safety gate as before this existed.
+        risk = apply_risk_management(order, price)
+        if risk["changed"]:
+            db.update_order_risk_state(order["id"], risk["sl"], risk["peak_price"], risk["profit_locked"])
+        order = {**order, "sl": risk["sl"], "peak_price": risk["peak_price"], "profit_locked": risk["profit_locked"]}
 
         hit = _check_hit(order, price)
         if hit:

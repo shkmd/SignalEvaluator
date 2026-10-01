@@ -726,6 +726,8 @@ class AutoTradeSettingsRequest(BaseModel):
     default_lock_enabled: Optional[bool] = None
     default_lock_trigger_pct: Optional[float] = None
     default_lock_pct: Optional[float] = None
+    default_lock_trigger_amount: Optional[float] = None
+    default_lock_amount: Optional[float] = None
     live_auto_exit_enabled: Optional[bool] = None
 
 
@@ -749,6 +751,10 @@ def save_trading_settings(req: AutoTradeSettingsRequest, user_id: int = Depends(
         raise HTTPException(status_code=400, detail="default_lock_trigger_pct must be between 0 and 100")
     if "default_lock_pct" in updates and not (0 <= updates["default_lock_pct"] <= 100):
         raise HTTPException(status_code=400, detail="default_lock_pct must be between 0 and 100")
+    if "default_lock_trigger_amount" in updates and updates["default_lock_trigger_amount"] <= 0:
+        raise HTTPException(status_code=400, detail="default_lock_trigger_amount must be greater than 0")
+    if "default_lock_amount" in updates and updates["default_lock_amount"] < 0:
+        raise HTTPException(status_code=400, detail="default_lock_amount cannot be negative")
     return db.save_auto_trade_settings(user_id, updates)
 
 
@@ -795,6 +801,8 @@ class OrderRiskSettingsRequest(BaseModel):
     trail_pct: Optional[float] = None
     lock_trigger_pct: Optional[float] = None
     lock_pct: Optional[float] = None
+    lock_trigger_amount: Optional[float] = None
+    lock_amount: Optional[float] = None
 
 
 @app.post("/api/trading/orders/{order_id}/risk-settings")
@@ -812,7 +820,14 @@ def save_order_risk_settings(order_id: int, req: OrderRiskSettingsRequest, user_
         raise HTTPException(status_code=400, detail="lock_trigger_pct must be between 0 and 100.")
     if req.lock_pct is not None and not (0 <= req.lock_pct <= 100):
         raise HTTPException(status_code=400, detail="lock_pct must be between 0 and 100.")
-    return db.update_order_risk_settings(user_id, order_id, req.trailing_enabled, req.trail_pct, req.lock_trigger_pct, req.lock_pct)
+    if req.lock_trigger_amount is not None and req.lock_trigger_amount <= 0:
+        raise HTTPException(status_code=400, detail="lock_trigger_amount must be greater than 0.")
+    if req.lock_amount is not None and req.lock_amount < 0:
+        raise HTTPException(status_code=400, detail="lock_amount cannot be negative.")
+    return db.update_order_risk_settings(
+        user_id, order_id, req.trailing_enabled, req.trail_pct, req.lock_trigger_pct, req.lock_pct,
+        req.lock_trigger_amount, req.lock_amount,
+    )
 
 
 class BrokerConnectRequest(BaseModel):

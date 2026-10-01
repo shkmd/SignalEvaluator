@@ -5,9 +5,10 @@ from app.trading import apply_risk_management
 
 def _order(**overrides):
     base = {
-        "side": "buy", "entry_price": 100.0, "sl": 90.0, "peak_price": 100.0,
+        "side": "buy", "entry_price": 100.0, "sl": 90.0, "peak_price": 100.0, "quantity": 10,
         "profit_locked": False, "trailing_enabled": False, "trail_pct": None,
         "lock_trigger_pct": None, "lock_pct": None,
+        "lock_trigger_amount": None, "lock_amount": None,
     }
     base.update(overrides)
     return base
@@ -97,3 +98,61 @@ def test_missing_entry_price_is_a_safe_no_op():
     order = _order(entry_price=None, trailing_enabled=True, trail_pct=5)
     result = apply_risk_management(order, 120.0)
     assert result["changed"] is False
+
+
+# ---- rupee-amount profit lock ("if a position reached ₹1500 profit, lock it") ----
+
+def test_amount_lock_triggers_once_total_profit_crosses_threshold():
+    # entry 100, qty 10 -- +15 points = +₹150 total profit, which is below the 1500 trigger
+    order = _order(quantity=10, lock_trigger_amount=1500, lock_amount=1500)
+    result = apply_risk_management(order, 115.0)
+    assert result["profit_locked"] is False
+    assert result["sl"] == 90.0  # untouched
+
+    # +160 points = +₹1600 total -- crosses ₹1500
+    result = apply_risk_management(order, 260.0)
+    assert result["profit_locked"] is True
+    assert result["sl"] == 250.0  # entry 100 + 1500/qty(10) = 250 -- locks the full ₹1500
+
+
+def test_amount_lock_blank_lock_amount_is_treated_as_none_not_zero():
+    # lock_amount omitted entirely (None) -- caller (API/UI) is responsible for defaulting it to
+    # the trigger amount; the engine itself must not fire with no lock amount to compute against.
+    order = _order(quantity=10, lock_trigger_amount=1500, lock_amount=None)
+    result = apply_risk_management(order, 260.0)
+    assert result["profit_locked"] is False
+    assert result["sl"] == 90.0
+
+
+def test_amount_lock_on_short_side():
+    order = _order(side="sell", entry_price=1000.0, sl=1100.0, peak_price=1000.0, quantity=10,
+                    lock_trigger_amount=1500, lock_amount=1500)
+    result = apply_risk_management(order, 950.0)  # (1000-950)*10 = ₹500 -- short of the ₹1500 trigger
+    assert result["profit_locked"] is False
+
+    result = apply_risk_management(order, 850.0)  # (1000-850)*10 = ₹1500 -- crosses it
+    assert result["profit_locked"] is True
+    assert result["sl"] == 850.0  # entry 1000 - 1500/qty(10) = 850 -- locks the full ₹1500
+
+
+def test_pct_and_amount_triggers_combine_and_the_tighter_lock_wins():
+    # pct lock proposes entry*1.02 = 102.0; amount lock (qty 10, ₹1500) proposes entry + 150 = 250.0
+    order = _order(quantity=10, lock_trigger_pct=5, lock_pct=2, lock_trigger_amount=1500, lock_amount=1500)
+    result = apply_risk_management(order, 260.0)  # clears both triggers
+    assert result["profit_locked"] is True
+    assert result["sl"] == 250.0  # the tighter of the two candidate locks
+
+
+def test_amount_lock_needs_a_quantity():
+    order = _order(quantity=None, lock_trigger_amount=1500, lock_amount=1500)
+    result = apply_risk_management(order, 500.0)
+    assert result["profit_locked"] is False
+    assert result["sl"] == 90.0  # lock rule skipped (no quantity to size it) -- only the peak moved
+
+
+def test_live_and_paper_orders_use_the_same_engine():
+    # No mode-based branching inside apply_risk_management -- the function itself is mode-
+    # agnostic; trading.monitor_open_positions() is what decides whether to actually act on it.
+    order = _order(quantity=10, lock_trigger_amount=1500, lock_amount=1500, mode="live")
+    result = apply_risk_management(order, 260.0)
+    assert result["profit_locked"] is True and result["sl"] == 250.0

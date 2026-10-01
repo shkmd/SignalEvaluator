@@ -510,6 +510,20 @@ def init_db():
             conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_trigger_pct REAL NOT NULL DEFAULT 5")
             conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_pct REAL NOT NULL DEFAULT 2")
             conn.commit()
+
+        # Rupee-amount profit lock, alongside the original percentage-based one above -- a fixed
+        # amount (e.g. "lock in ₹1500") doesn't depend on entry price or lot size the way a %
+        # does, which is the more natural unit for an options position. Either or both of a
+        # position's %-trigger and amount-trigger can be set; apply_risk_management() fires
+        # whichever crosses first and keeps the tighter resulting SL.
+        if "lock_trigger_amount" not in orders_cols:
+            conn.execute("ALTER TABLE orders ADD COLUMN lock_trigger_amount REAL")
+            conn.execute("ALTER TABLE orders ADD COLUMN lock_amount REAL")
+            conn.commit()
+        if "default_lock_trigger_amount" not in ats_cols:
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_trigger_amount REAL")
+            conn.execute("ALTER TABLE auto_trade_settings ADD COLUMN default_lock_amount REAL")
+            conn.commit()
         if "live_auto_exit_enabled" not in ats_cols:
             # Defaults OFF -- nobody with a live-trading setup already configured should have
             # their behavior silently change to "the monitor loop now places real exit orders
@@ -1242,6 +1256,8 @@ DEFAULT_SETTINGS = {
     "default_lock_enabled": False,
     "default_lock_trigger_pct": 5,
     "default_lock_pct": 2,
+    "default_lock_trigger_amount": None,
+    "default_lock_amount": None,
     "live_auto_exit_enabled": False,
 }
 
@@ -1277,6 +1293,7 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
                 position_sizing_enabled = ?, auto_graduate_enabled = ?, auto_graduate_min_trades = ?,
                 auto_graduate_min_win_rate = ?, default_trailing_enabled = ?, default_trail_pct = ?,
                 default_lock_enabled = ?, default_lock_trigger_pct = ?, default_lock_pct = ?,
+                default_lock_trigger_amount = ?, default_lock_amount = ?,
                 live_auto_exit_enabled = ?
             WHERE user_id = ?
             """,
@@ -1296,6 +1313,8 @@ def save_auto_trade_settings(user_id: int, settings: dict) -> dict:
                 1 if current["default_lock_enabled"] else 0,
                 current["default_lock_trigger_pct"],
                 current["default_lock_pct"],
+                current["default_lock_trigger_amount"],
+                current["default_lock_amount"],
                 1 if current["live_auto_exit_enabled"] else 0,
                 user_id,
             ),
@@ -1386,8 +1405,8 @@ def insert_order(user_id: int, order: dict) -> int:
             INSERT INTO orders
             (user_id, created_at, signal_id, mode, symbol, resolved_symbol, instrument, strike, side,
              quantity, entry_price, sl, target, status, broker, broker_order_id,
-             trailing_enabled, trail_pct, lock_trigger_pct, lock_pct, peak_price)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)
+             trailing_enabled, trail_pct, lock_trigger_pct, lock_pct, lock_trigger_amount, lock_amount, peak_price)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -1409,6 +1428,8 @@ def insert_order(user_id: int, order: dict) -> int:
                 order.get("trail_pct"),
                 order.get("lock_trigger_pct"),
                 order.get("lock_pct"),
+                order.get("lock_trigger_amount"),
+                order.get("lock_amount"),
                 order.get("entry_price"),  # peak_price starts at entry
             ),
         )
@@ -1515,21 +1536,23 @@ def close_order(order_id: int, exit_price: float, exit_reason: str, pnl: float) 
 
 
 def update_order_risk_settings(
-    user_id: int, order_id: int, trailing_enabled: bool, trail_pct: float, lock_trigger_pct: float, lock_pct: float
+    user_id: int, order_id: int, trailing_enabled: bool, trail_pct: float, lock_trigger_pct: float, lock_pct: float,
+    lock_trigger_amount: float = None, lock_amount: float = None,
 ) -> dict:
     """Per-position risk-manager override -- lets a user turn on trailing/profit-lock (or
-    change the %s) on an already-open position, not just at entry time via the per-user
-    defaults. Resets profit_locked to 0 so a freshly-lowered lock_trigger_pct gets a chance to
-    fire again rather than staying permanently skipped from before the edit."""
+    change the %s/amounts) on an already-open position, not just at entry time via the per-user
+    defaults. Resets profit_locked to 0 so a freshly-lowered trigger gets a chance to fire again
+    rather than staying permanently skipped from before the edit."""
     conn = _conn()
     try:
         conn.execute(
             """
             UPDATE orders
-            SET trailing_enabled = ?, trail_pct = ?, lock_trigger_pct = ?, lock_pct = ?, profit_locked = 0
+            SET trailing_enabled = ?, trail_pct = ?, lock_trigger_pct = ?, lock_pct = ?,
+                lock_trigger_amount = ?, lock_amount = ?, profit_locked = 0
             WHERE id = ? AND user_id = ?
             """,
-            (1 if trailing_enabled else 0, trail_pct, lock_trigger_pct, lock_pct, order_id, user_id),
+            (1 if trailing_enabled else 0, trail_pct, lock_trigger_pct, lock_pct, lock_trigger_amount, lock_amount, order_id, user_id),
         )
         conn.commit()
         return get_order(user_id, order_id)

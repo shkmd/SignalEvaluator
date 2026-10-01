@@ -975,13 +975,22 @@ Target 16/18/20/24/30+"></textarea>
           <input id="at-lock-pct" type="number" min="0" max="100" step="0.1" style="width:70px" />
           <span style="color:var(--muted);font-size:12px">%</span>
         </div>
+        <div class="row" style="margin-top:4px">
+          <span style="color:var(--muted);font-size:12px;padding-left:28px">or once up</span>
+          <input id="at-lock-trigger-amount" type="number" min="0.01" step="0.01" style="width:90px" placeholder="e.g. 1500" />
+          <span style="color:var(--muted);font-size:12px">₹, lock at least</span>
+          <input id="at-lock-amount" type="number" min="0" step="0.01" style="width:90px" placeholder="defaults to same" />
+          <span style="color:var(--muted);font-size:12px">₹ (whole position)</span>
+        </div>
         <div style="color:var(--muted);font-size:12px;margin-top:4px">
-          Risk Manager, applied to every new paper position going forward (edit an individual
-          position's settings from its row in Positions). Trailing continuously tightens the SL
-          as price makes new favorable highs/lows, never loosens it. Profit-lock is a one-time
-          move: once unrealized profit crosses the trigger, SL jumps to guarantee at least the
-          locked %. Both can be on together -- whichever gives the better SL wins. Paper only --
-          it doesn't apply to live positions (see the toggle below for those).
+          Risk Manager, applied to every new position (paper and live) going forward -- edit an
+          individual position's settings from its row in Positions. Trailing continuously
+          tightens the SL as price makes new favorable highs/lows, never loosens it. Profit-lock
+          is a one-time move: once unrealized profit crosses either trigger (% of entry, or a
+          flat ₹ amount on the whole position -- use whichever suits you, or both), SL jumps to
+          guarantee at least the locked %/₹. All rules can be on together -- whichever gives the
+          better SL wins. For live positions this only updates the SL this app tracks; a real
+          exit order is only placed automatically if "Auto-exit live positions" below is on.
         </div>
 
         <div class="row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
@@ -1367,8 +1376,18 @@ Target 16/18/20/24/30+"></textarea>
         <input id="risk-lock-pct" type="number" min="0" max="100" step="0.1" placeholder="e.g. 2" />
       </label>
     </div>
+    <div class="row" style="margin-top:8px">
+      <label>or lock trigger ₹
+        <input id="risk-lock-trigger-amount" type="number" min="0.01" step="0.01" placeholder="e.g. 1500" />
+      </label>
+      <label>Lock at ₹
+        <input id="risk-lock-amount" type="number" min="0" step="0.01" placeholder="defaults to same" />
+      </label>
+    </div>
     <div style="color:var(--muted);font-size:12px;margin-top:8px">
-      Leave the lock fields blank to disable profit-lock for this position. SL only ever
+      Leave the lock fields blank to disable profit-lock for this position. The % and ₹ triggers
+      are independent -- set either, both, or neither. ₹ is on the whole position (quantity
+      included); leaving "Lock at ₹" blank locks the full triggered amount. SL only ever
       tightens -- these rules never move it against you.
     </div>
     <div class="row" style="margin-top:10px">

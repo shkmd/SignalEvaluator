@@ -46,7 +46,10 @@ def test_auto_exit_enabled_places_a_real_order_and_records_the_close():
          patch.object(trading.alerts, "maybe_alert_sl_proximity") as mock_proximity:
         closed = trading.monitor_open_positions()
 
-    mock_close.assert_called_once_with(1, order, "sl_hit")
+    # monitor_open_positions() now runs the same Risk Manager pass live positions get (see
+    # test_risk_manager.py) before the hit-check, which stamps peak_price/profit_locked onto
+    # the order dict it hands to _close_live_order even when neither value actually changed.
+    mock_close.assert_called_once_with(1, {**order, "peak_price": order["entry_price"], "profit_locked": False}, "sl_hit")
     mock_outcome.assert_called_once_with(1, 42, "sl_hit")
     mock_graduate.assert_called_once_with(1, "F&O Scanner")
     mock_alert_ok.assert_called_once()
