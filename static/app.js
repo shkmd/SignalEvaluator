@@ -1010,6 +1010,7 @@ async function loadBroadcastSettings() {
   const s = await res.json();
   $("bc-enabled").value = String(!!s.enabled);
   $("bc-min-score").value = s.min_score ?? 60;
+  $("bc-fo-only").checked = !!s.fo_only;
   if (s.target_chat_id) select.value = String(s.target_chat_id);
 }
 
@@ -1022,6 +1023,7 @@ $("btn-save-broadcast-settings").onclick = async () => {
     target_chat_id: select.value ? parseInt(select.value, 10) : null,
     target_chat_title: select.value ? selectedOption.dataset.title || selectedOption.textContent : null,
     min_score: parseFloat($("bc-min-score").value) || 0,
+    fo_only: $("bc-fo-only").checked,
   };
   if (payload.enabled && !payload.target_chat_id) {
     statusEl.textContent = "Pick a target channel first.";

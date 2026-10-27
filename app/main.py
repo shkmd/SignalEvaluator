@@ -1196,6 +1196,7 @@ class TelegramBroadcastSettingsRequest(BaseModel):
     target_chat_id: Optional[int] = None
     target_chat_title: Optional[str] = None
     min_score: float = 60
+    fo_only: bool = False
 
 
 @app.get("/api/telegram/broadcast-settings")
@@ -1206,7 +1207,7 @@ def get_telegram_broadcast_settings(user_id: int = Depends(current_user_id)):
 @app.post("/api/telegram/broadcast-settings")
 def save_telegram_broadcast_settings(req: TelegramBroadcastSettingsRequest, user_id: int = Depends(current_user_id)):
     return db.save_telegram_broadcast_settings(
-        user_id, req.enabled, req.target_chat_id, req.target_chat_title, req.min_score
+        user_id, req.enabled, req.target_chat_id, req.target_chat_title, req.min_score, req.fo_only
     )
 
 

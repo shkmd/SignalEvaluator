@@ -92,6 +92,8 @@ def maybe_broadcast(user_id: int, signal: dict, evaluation: dict, signal_id: int
         return
     if (evaluation.get("score") or 0) < (settings.get("min_score") or 0):
         return
+    if settings.get("fo_only") and (signal.get("instrument") or "EQ").upper() not in ("CE", "PE"):
+        return  # F&O-only mode -- skip plain equity signals, regardless of source
 
     text = format_signal_message(signal, evaluation)
 

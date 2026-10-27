@@ -682,10 +682,12 @@ Target 16/18/20/24/30+"></textarea>
       <div class="panel">
         <h2>Broadcast Signals</h2>
         <div style="color:var(--muted);font-size:12px;margin-bottom:12px">
-          Automatically posts every new signal (manual, Telegram-sourced, or F&amp;O Scanner) that
-          clears the score below to a channel you have posting rights to -- sent immediately via
-          your own connected Telegram session, no preview step. The min score exists to keep weak
-          signals from spamming the channel.
+          Automatically posts every new signal (manual, Telegram-sourced, or from the F&amp;O
+          Scanner feature) that clears the score below to a channel you have posting rights to --
+          sent immediately via your own connected Telegram session, no preview step. The min score
+          exists to keep weak signals from spamming the channel. The "Only F&amp;O" checkbox below
+          is a separate filter on the signal itself (options/CE-PE vs. plain equity) -- turn it on
+          to forward option calls only, regardless of which feature generated them.
         </div>
         <div class="grid" style="grid-template-columns: repeat(3, 1fr)">
           <label>Broadcast
@@ -699,6 +701,12 @@ Target 16/18/20/24/30+"></textarea>
           </label>
           <label>Min score to send
             <input id="bc-min-score" type="number" min="0" max="100" step="1" />
+          </label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="bc-fo-only" style="width:auto" />
+            Only F&amp;O (options/CE-PE) signals -- skip plain equity
           </label>
         </div>
         <div class="row">

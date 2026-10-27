@@ -466,6 +466,11 @@ def init_db():
             conn.execute("ALTER TABLE chartink_webhook_hits ADD COLUMN signal_ids TEXT")
             conn.commit()
 
+        bc_cols = {c["name"] for c in conn.execute("PRAGMA table_info(telegram_broadcast_settings)").fetchall()}
+        if "fo_only" not in bc_cols:
+            conn.execute("ALTER TABLE telegram_broadcast_settings ADD COLUMN fo_only INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+
         sss_cols = {c["name"] for c in conn.execute("PRAGMA table_info(scanner_signal_settings)").fetchall()}
         if "strike_preference" not in sss_cols:
             conn.execute("ALTER TABLE scanner_signal_settings ADD COLUMN strike_preference TEXT NOT NULL DEFAULT 'ATM'")
@@ -2196,26 +2201,32 @@ def get_telegram_broadcast_settings(user_id: int) -> dict:
     try:
         row = conn.execute("SELECT * FROM telegram_broadcast_settings WHERE user_id = ?", (user_id,)).fetchone()
         if not row:
-            return {"user_id": user_id, "enabled": False, "target_chat_id": None, "target_chat_title": None, "min_score": 60}
+            return {
+                "user_id": user_id, "enabled": False, "target_chat_id": None, "target_chat_title": None,
+                "min_score": 60, "fo_only": False,
+            }
         return dict(row)
     finally:
         conn.close()
 
 
-def save_telegram_broadcast_settings(user_id: int, enabled: bool, target_chat_id: int, target_chat_title: str, min_score: float) -> dict:
+def save_telegram_broadcast_settings(
+    user_id: int, enabled: bool, target_chat_id: int, target_chat_title: str, min_score: float, fo_only: bool = False
+) -> dict:
     conn = _conn()
     try:
         conn.execute(
             """
-            INSERT INTO telegram_broadcast_settings (user_id, enabled, target_chat_id, target_chat_title, min_score)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO telegram_broadcast_settings (user_id, enabled, target_chat_id, target_chat_title, min_score, fo_only)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 enabled = excluded.enabled,
                 target_chat_id = excluded.target_chat_id,
                 target_chat_title = excluded.target_chat_title,
-                min_score = excluded.min_score
+                min_score = excluded.min_score,
+                fo_only = excluded.fo_only
             """,
-            (user_id, 1 if enabled else 0, target_chat_id, target_chat_title, min_score),
+            (user_id, 1 if enabled else 0, target_chat_id, target_chat_title, min_score, 1 if fo_only else 0),
         )
         conn.commit()
         return get_telegram_broadcast_settings(user_id)
