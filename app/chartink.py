@@ -149,7 +149,7 @@ def _generate_one(user_id: int, scan: dict, symbol: str, trigger_price: float, b
     if signal_id:
         trading.auto_trade_check(user_id, signal_id, signal, evaluation)
         _maybe_paper_trade(user_id, signal_id, signal, evaluation, scan)
-        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
+        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id, source="chartink")
         alerts.maybe_alert_signal(user_id, signal, evaluation, signal_id)
         confluence.check_and_trade(user_id, signal_id)
     return signal_id

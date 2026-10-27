@@ -993,71 +993,168 @@ $("dashboard-view-all").onclick = (e) => {
 async function loadTelegramTab() {
   await refreshTelegramStatus();
   await refreshTelegramChannels();
-  await loadBroadcastSettings();
+  await loadBroadcastRules();
   await loadTelegramPaperTradeSettings();
   await loadAlertSettings();
 }
 
-async function loadBroadcastSettings() {
-  const select = $("bc-target-channel");
-  select.innerHTML =
+const BROADCAST_SOURCE_LABELS = { manual: "Manual", telegram: "Telegram", scanner: "F&O Scanner", chartink: "Chartink" };
+let _broadcastRuleSeq = 0; // client-side-only id for a not-yet-saved rule block
+
+function _channelOptionsHtml(selectedChatId) {
+  return (
     `<option value="">-- choose a channel --</option>` +
     _allChannels
-      .map((c) => `<option value="${c.telegram_chat_id}" data-title="${(c.title || "").replace(/"/g, "&quot;")}">${c.title || c.telegram_chat_id}</option>`)
-      .join("");
-
-  const res = await fetch("/api/telegram/broadcast-settings");
-  const s = await res.json();
-  $("bc-enabled").value = String(!!s.enabled);
-  $("bc-min-score").value = s.min_score ?? 60;
-  $("bc-fo-only").checked = !!s.fo_only;
-  if (s.target_chat_id) select.value = String(s.target_chat_id);
+      .map(
+        (c) =>
+          `<option value="${c.telegram_chat_id}" data-title="${(c.title || "").replace(/"/g, "&quot;")}" ${String(c.telegram_chat_id) === String(selectedChatId) ? "selected" : ""}>${c.title || c.telegram_chat_id}</option>`
+      )
+      .join("")
+  );
 }
 
-$("btn-save-broadcast-settings").onclick = async () => {
-  const statusEl = $("broadcast-settings-status");
-  const select = $("bc-target-channel");
+function _broadcastRuleHtml(rule) {
+  // rule.id is a real DB id for a saved rule, or a "new-N" placeholder for an unsaved one.
+  const domId = `bc-rule-${rule.id}`;
+  const sources = rule.sources || Object.keys(BROADCAST_SOURCE_LABELS); // null/unset = every source, so default every box to checked
+  const sourceBoxes = Object.entries(BROADCAST_SOURCE_LABELS)
+    .map(
+      ([key, label]) =>
+        `<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+          <input type="checkbox" class="bc-source" value="${key}" style="width:auto" ${sources.includes(key) ? "checked" : ""} />
+          ${label}
+        </label>`
+    )
+    .join("");
+
+  return `
+    <div class="panel" id="${domId}" data-rule-id="${rule.id}" style="margin-top:12px;padding:14px;border:1px solid var(--border)">
+      <div class="grid" style="grid-template-columns: repeat(3, 1fr)">
+        <label>Broadcast
+          <select class="bc-enabled">
+            <option value="false" ${!rule.enabled ? "selected" : ""}>Off</option>
+            <option value="true" ${rule.enabled ? "selected" : ""}>On</option>
+          </select>
+        </label>
+        <label>Target channel
+          <select class="bc-target-channel">${_channelOptionsHtml(rule.target_chat_id)}</select>
+        </label>
+        <label>Min score to send
+          <input class="bc-min-score" type="number" min="0" max="100" step="1" value="${rule.min_score ?? 60}" />
+        </label>
+      </div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:14px">${sourceBoxes}</div>
+      <div class="row" style="margin-top:8px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="checkbox" class="bc-fo-only" style="width:auto" ${rule.fo_only ? "checked" : ""} />
+          Only F&amp;O (options/CE-PE) signals -- skip plain equity
+        </label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary bc-save">Save</button>
+        <button class="secondary bc-test" ${typeof rule.id === "string" ? "disabled title='Save this broadcast first'" : ""}>Send test message</button>
+        <button class="secondary bc-delete">Delete</button>
+        <span class="bc-status" style="color:var(--muted);font-size:12px"></span>
+      </div>
+    </div>`;
+}
+
+function _collectBroadcastRulePayload(block) {
+  const select = block.querySelector(".bc-target-channel");
   const selectedOption = select.options[select.selectedIndex];
-  const payload = {
-    enabled: $("bc-enabled").value === "true",
+  const sources = Array.from(block.querySelectorAll(".bc-source:checked")).map((el) => el.value);
+  return {
+    enabled: block.querySelector(".bc-enabled").value === "true",
     target_chat_id: select.value ? parseInt(select.value, 10) : null,
     target_chat_title: select.value ? selectedOption.dataset.title || selectedOption.textContent : null,
-    min_score: parseFloat($("bc-min-score").value) || 0,
-    fo_only: $("bc-fo-only").checked,
+    min_score: parseFloat(block.querySelector(".bc-min-score").value) || 0,
+    fo_only: block.querySelector(".bc-fo-only").checked,
+    sources,
   };
-  if (payload.enabled && !payload.target_chat_id) {
-    statusEl.textContent = "Pick a target channel first.";
-    return;
-  }
-  statusEl.textContent = "Saving…";
-  try {
-    const res = await fetch("/api/telegram/broadcast-settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
-    statusEl.textContent = "Saved.";
-  } catch (e) {
-    statusEl.textContent = "Error: " + e.message;
-  }
-};
+}
 
-$("btn-send-broadcast-test").onclick = async () => {
-  const statusEl = $("broadcast-settings-status");
-  const btn = $("btn-send-broadcast-test");
-  btn.disabled = true;
-  statusEl.textContent = "Sending test message…";
-  try {
-    const res = await fetch("/api/telegram/broadcast-test", { method: "POST" });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Send failed");
-    statusEl.textContent = `Sent to ${data.target}. Check the channel.`;
-  } catch (e) {
-    statusEl.textContent = "Error: " + e.message;
-  } finally {
-    btn.disabled = false;
-  }
+function _wireBroadcastRuleBlock(block) {
+  const statusEl = block.querySelector(".bc-status");
+
+  block.querySelector(".bc-save").onclick = async () => {
+    const payload = _collectBroadcastRulePayload(block);
+    if (payload.sources.length === 0) {
+      statusEl.textContent = "Pick at least one source to forward.";
+      return;
+    }
+    if (payload.enabled && !payload.target_chat_id) {
+      statusEl.textContent = "Pick a target channel first.";
+      return;
+    }
+    const ruleId = block.dataset.ruleId;
+    const isNew = ruleId.startsWith("new-");
+    statusEl.textContent = "Saving…";
+    try {
+      const res = await fetch(isNew ? "/api/telegram/broadcast-rules" : `/api/telegram/broadcast-rules/${ruleId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
+      statusEl.textContent = "Saved.";
+      await loadBroadcastRules(); // re-render so a brand-new rule gets its real id (enables Test)
+    } catch (e) {
+      statusEl.textContent = "Error: " + e.message;
+    }
+  };
+
+  block.querySelector(".bc-delete").onclick = async () => {
+    const ruleId = block.dataset.ruleId;
+    if (ruleId.startsWith("new-")) {
+      block.remove(); // never saved -- just drop it from the page
+      return;
+    }
+    if (!confirm("Delete this broadcast? Signals will stop being forwarded to its channel.")) return;
+    statusEl.textContent = "Deleting…";
+    try {
+      const res = await fetch(`/api/telegram/broadcast-rules/${ruleId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json()).detail || "Delete failed");
+      block.remove();
+    } catch (e) {
+      statusEl.textContent = "Error: " + e.message;
+    }
+  };
+
+  const testBtn = block.querySelector(".bc-test");
+  testBtn.onclick = async () => {
+    const ruleId = block.dataset.ruleId;
+    testBtn.disabled = true;
+    statusEl.textContent = "Sending test message…";
+    try {
+      const res = await fetch(`/api/telegram/broadcast-rules/${ruleId}/test`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Send failed");
+      statusEl.textContent = `Sent to ${data.target}. Check the channel.`;
+    } catch (e) {
+      statusEl.textContent = "Error: " + e.message;
+    } finally {
+      testBtn.disabled = false;
+    }
+  };
+}
+
+async function loadBroadcastRules() {
+  const res = await fetch("/api/telegram/broadcast-rules");
+  const rules = await res.json();
+  const container = $("broadcast-rules-list");
+  container.innerHTML = rules.length
+    ? rules.map(_broadcastRuleHtml).join("")
+    : `<div style="color:var(--muted);font-size:13px;margin-top:8px">No broadcasts set up yet -- add one below.</div>`;
+  container.querySelectorAll("[data-rule-id]").forEach(_wireBroadcastRuleBlock);
+}
+
+$("btn-add-broadcast-rule").onclick = () => {
+  _broadcastRuleSeq += 1;
+  const blankRule = { id: `new-${_broadcastRuleSeq}`, enabled: true, target_chat_id: null, min_score: 60, fo_only: false, sources: null };
+  $("broadcast-rules-list").insertAdjacentHTML("beforeend", _broadcastRuleHtml(blankRule));
+  const block = document.getElementById(`bc-rule-${blankRule.id}`);
+  _wireBroadcastRuleBlock(block);
+  block.scrollIntoView({ behavior: "smooth", block: "nearest" });
 };
 
 async function loadTelegramPaperTradeSettings() {

@@ -158,7 +158,7 @@ def _generate_one(user_id: int, result: dict, classification: str) -> int:
     if signal_id:
         trading.auto_trade_check(user_id, signal_id, signal, evaluation)
         _maybe_paper_trade(user_id, signal_id, signal, evaluation)
-        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
+        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id, source="scanner")
         alerts.maybe_alert_signal(user_id, signal, evaluation, signal_id)
         confluence.check_and_trade(user_id, signal_id)
     return signal_id

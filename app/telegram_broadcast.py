@@ -1,11 +1,14 @@
-"""Formats a signal into a compact channel-style message and posts it to a Telegram chat
-the user has write access to, using their own already-connected Telethon session -- the
+"""Formats a signal into a compact channel-style message and posts it to one or more Telegram
+chats the user has write access to, using their own already-connected Telethon session -- the
 same account/session used for reading channels, not a bot.
 
-Fires automatically after every signal (manual, Telegram-sourced, or F&O Scanner) that
-clears the user's configured min_score, immediately, with no per-message review step --
-that's a deliberate choice the user made; the min_score gate exists specifically to keep
-weak signals from spamming the target channel.
+A user can configure several broadcast rules (app/db.py's telegram_broadcast_rules), each with
+its own target channel, min score, an optional "F&O only" (CE/PE) filter, and an optional set of
+signal sources (manual/telegram/scanner/chartink) it accepts -- e.g. one rule forwarding
+everything to a personal channel, and another forwarding only F&O Scanner + Chartink signals to
+a public one. Fires automatically for every matching rule immediately after a signal is created,
+with no per-message review step -- that's a deliberate choice the user made; the min_score gate
+exists specifically to keep weak signals from spamming a channel.
 """
 import asyncio
 import re
@@ -84,16 +87,30 @@ def format_signal_message(signal: dict, evaluation: dict) -> str:
     return "\n".join(lines)
 
 
-def maybe_broadcast(user_id: int, signal: dict, evaluation: dict, signal_id: int) -> None:
-    """Fire-and-forget: schedules the send on the Telethon client's own event loop and
-    returns immediately. Safe to call from either an async or a background-thread context."""
-    settings = db.get_telegram_broadcast_settings(user_id)
-    if not settings.get("enabled") or not settings.get("target_chat_id"):
+def _rule_matches(rule: dict, signal: dict, evaluation: dict, source: str) -> bool:
+    if not rule.get("enabled") or not rule.get("target_chat_id"):
+        return False
+    if (evaluation.get("score") or 0) < (rule.get("min_score") or 0):
+        return False
+    if rule.get("fo_only") and (signal.get("instrument") or "EQ").upper() not in ("CE", "PE"):
+        return False  # F&O-only mode -- skip plain equity signals
+    sources = rule.get("sources")
+    if sources and source not in sources:
+        return False  # this rule only forwards specific sources, and this isn't one of them
+    return True
+
+
+def maybe_broadcast(user_id: int, signal: dict, evaluation: dict, signal_id: int, source: str = "manual") -> None:
+    """Fire-and-forget: schedules a send, on the Telethon client's own event loop, for every one
+    of the user's broadcast rules that matches this signal -- same signal can go to several
+    channels at once if more than one rule matches. Returns immediately either way. Safe to call
+    from either an async or a background-thread context.
+
+    `source` must be one of db.BROADCAST_SOURCES -- match what was passed to db.insert_signal()
+    for this same signal, so a rule's source filter (if any) actually means something."""
+    rules = [r for r in db.list_broadcast_rules(user_id) if _rule_matches(r, signal, evaluation, source)]
+    if not rules:
         return
-    if (evaluation.get("score") or 0) < (settings.get("min_score") or 0):
-        return
-    if settings.get("fo_only") and (signal.get("instrument") or "EQ").upper() not in ("CE", "PE"):
-        return  # F&O-only mode -- skip plain equity signals, regardless of source
 
     text = format_signal_message(signal, evaluation)
 
@@ -113,25 +130,27 @@ def maybe_broadcast(user_id: int, signal: dict, evaluation: dict, signal_id: int
         print(f"[broadcast] user {user_id}: Telegram client has no active loop -- not connected yet.")
         return
 
-    async def _send():
+    async def _send(target_chat_id, target_chat_title):
         try:
             if not client.is_connected():
                 await client.connect()
-            await client.send_message(settings["target_chat_id"], text)
-            print(f"[broadcast] user {user_id}: signal #{signal_id} sent to {settings.get('target_chat_title')}")
+            await client.send_message(target_chat_id, text)
+            print(f"[broadcast] user {user_id}: signal #{signal_id} sent to {target_chat_title}")
         except Exception as e:
-            print(f"[broadcast] user {user_id}: send failed for signal #{signal_id}: {e}")
+            print(f"[broadcast] user {user_id}: send failed for signal #{signal_id} -> {target_chat_title}: {e}")
 
-    asyncio.run_coroutine_threadsafe(_send(), loop)
+    for rule in rules:
+        asyncio.run_coroutine_threadsafe(_send(rule["target_chat_id"], rule.get("target_chat_title")), loop)
 
 
-async def send_test_message(user_id: int) -> dict:
+async def send_test_message(user_id: int, rule_id: int) -> dict:
     """Awaitable, meant to be called directly from an async FastAPI endpoint (already on
     the same event loop as the user's Telethon client) -- no thread-hop needed, unlike
-    maybe_broadcast(). Ignores the score gate; always sends, clearly labeled as a test."""
-    settings = db.get_telegram_broadcast_settings(user_id)
-    if not settings.get("enabled") or not settings.get("target_chat_id"):
-        return {"sent": False, "reason": "Broadcast isn't enabled or no target channel is set -- configure it first."}
+    maybe_broadcast(). Ignores the score/source/fo_only gates; always sends to this one rule's
+    target, clearly labeled as a test."""
+    rule = db.get_broadcast_rule(user_id, rule_id)
+    if not rule or not rule.get("target_chat_id"):
+        return {"sent": False, "reason": "No target channel is set on this broadcast -- configure it first."}
 
     test_signal = {
         "resolved_symbol": "TEST", "instrument": "EQ",
@@ -149,5 +168,5 @@ async def send_test_message(user_id: int) -> dict:
     if not await client.is_user_authorized():
         return {"sent": False, "reason": "Telegram session isn't logged in -- log in again from the Telegram tab."}
 
-    await client.send_message(settings["target_chat_id"], text)
-    return {"sent": True, "target": settings.get("target_chat_title"), "text": text}
+    await client.send_message(rule["target_chat_id"], text)
+    return {"sent": True, "target": rule.get("target_chat_title"), "text": text}

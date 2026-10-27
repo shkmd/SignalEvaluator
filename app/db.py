@@ -293,6 +293,24 @@ CREATE TABLE IF NOT EXISTS telegram_broadcast_settings (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+-- Superseded telegram_broadcast_settings' one-rule-per-user shape -- a user can now forward to
+-- several channels, each with its own target/min-score/fo_only and which signal SOURCES
+-- (manual/telegram/scanner/chartink) it accepts. init_db() migrates any existing single-row
+-- setting into here once (as an unrestricted-sources rule, so existing behavior is unchanged),
+-- then telegram_broadcast_settings is no longer written to.
+CREATE TABLE IF NOT EXISTS telegram_broadcast_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    target_chat_id INTEGER,
+    target_chat_title TEXT,
+    min_score REAL NOT NULL DEFAULT 60,
+    fo_only INTEGER NOT NULL DEFAULT 0,
+    sources_json TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 -- Dedicated paper-trading for signals auto-evaluated from monitored Telegram channels (see
 -- scanner_signal_settings.paper_trade_* for the same concept applied to F&O Scanner signals).
 -- Always paper, never live, and scoped to source='telegram' only -- separate from both the
@@ -470,6 +488,29 @@ def init_db():
         if "fo_only" not in bc_cols:
             conn.execute("ALTER TABLE telegram_broadcast_settings ADD COLUMN fo_only INTEGER NOT NULL DEFAULT 0")
             conn.commit()
+
+        # One-time: copy every existing single-row broadcast setting into the new multi-rule
+        # table, as an unrestricted-sources rule, so nobody's current broadcast config changes.
+        # Guarded on the new table being completely empty, not per-user, so it never re-runs
+        # (and never duplicates a user's rules) once it's done this once.
+        rules_empty = conn.execute("SELECT COUNT(*) AS n FROM telegram_broadcast_rules").fetchone()["n"] == 0
+        if rules_empty:
+            old_rows = conn.execute(
+                "SELECT user_id, enabled, target_chat_id, target_chat_title, min_score, fo_only "
+                "FROM telegram_broadcast_settings WHERE target_chat_id IS NOT NULL"
+            ).fetchall()
+            for r in old_rows:
+                conn.execute(
+                    """
+                    INSERT INTO telegram_broadcast_rules
+                    (user_id, enabled, target_chat_id, target_chat_title, min_score, fo_only, sources_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+                    """,
+                    (r["user_id"], r["enabled"], r["target_chat_id"], r["target_chat_title"], r["min_score"],
+                     r["fo_only"], datetime.now(timezone.utc).isoformat()),
+                )
+            if old_rows:
+                conn.commit()
 
         sss_cols = {c["name"] for c in conn.execute("PRAGMA table_info(scanner_signal_settings)").fetchall()}
         if "strike_preference" not in sss_cols:
@@ -2194,42 +2235,95 @@ def is_strategy_enabled_for_user(user_id: int, strategy_id: str) -> bool:
         conn.close()
 
 
-# ---- Telegram broadcast settings (per user) ----
+# ---- Telegram broadcast rules (per user, one user can have several) ----
 
-def get_telegram_broadcast_settings(user_id: int) -> dict:
+# Must match the `source` values app/db.py:insert_signal() actually stores (see each call site:
+# app/main.py "manual" default, app/telegram_ingest.py "telegram", app/scanner_signals.py
+# "scanner", app/chartink.py "chartink").
+BROADCAST_SOURCES = {"manual", "telegram", "scanner", "chartink"}
+
+
+def _row_to_broadcast_rule(row) -> dict:
+    d = dict(row)
+    raw = d.pop("sources_json")
+    d["sources"] = json.loads(raw) if raw else None  # None/empty = unrestricted, every source
+    return d
+
+
+def list_broadcast_rules(user_id: int) -> list:
     conn = _conn()
     try:
-        row = conn.execute("SELECT * FROM telegram_broadcast_settings WHERE user_id = ?", (user_id,)).fetchone()
-        if not row:
-            return {
-                "user_id": user_id, "enabled": False, "target_chat_id": None, "target_chat_title": None,
-                "min_score": 60, "fo_only": False,
-            }
-        return dict(row)
+        rows = conn.execute(
+            "SELECT * FROM telegram_broadcast_rules WHERE user_id = ? ORDER BY id", (user_id,)
+        ).fetchall()
+        return [_row_to_broadcast_rule(r) for r in rows]
     finally:
         conn.close()
 
 
-def save_telegram_broadcast_settings(
-    user_id: int, enabled: bool, target_chat_id: int, target_chat_title: str, min_score: float, fo_only: bool = False
+def create_broadcast_rule(
+    user_id: int, enabled: bool, target_chat_id: int, target_chat_title: str, min_score: float,
+    fo_only: bool = False, sources: list = None,
+) -> dict:
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO telegram_broadcast_rules
+            (user_id, enabled, target_chat_id, target_chat_title, min_score, fo_only, sources_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id, 1 if enabled else 0, target_chat_id, target_chat_title, min_score, 1 if fo_only else 0,
+                json.dumps(sources) if sources else None, datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM telegram_broadcast_rules WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return _row_to_broadcast_rule(row)
+    finally:
+        conn.close()
+
+
+def update_broadcast_rule(
+    user_id: int, rule_id: int, enabled: bool, target_chat_id: int, target_chat_title: str, min_score: float,
+    fo_only: bool = False, sources: list = None,
 ) -> dict:
     conn = _conn()
     try:
         conn.execute(
             """
-            INSERT INTO telegram_broadcast_settings (user_id, enabled, target_chat_id, target_chat_title, min_score, fo_only)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                enabled = excluded.enabled,
-                target_chat_id = excluded.target_chat_id,
-                target_chat_title = excluded.target_chat_title,
-                min_score = excluded.min_score,
-                fo_only = excluded.fo_only
+            UPDATE telegram_broadcast_rules
+            SET enabled = ?, target_chat_id = ?, target_chat_title = ?, min_score = ?, fo_only = ?, sources_json = ?
+            WHERE id = ? AND user_id = ?
             """,
-            (user_id, 1 if enabled else 0, target_chat_id, target_chat_title, min_score, 1 if fo_only else 0),
+            (
+                1 if enabled else 0, target_chat_id, target_chat_title, min_score, 1 if fo_only else 0,
+                json.dumps(sources) if sources else None, rule_id, user_id,
+            ),
         )
         conn.commit()
-        return get_telegram_broadcast_settings(user_id)
+        row = conn.execute("SELECT * FROM telegram_broadcast_rules WHERE id = ? AND user_id = ?", (rule_id, user_id)).fetchone()
+        return _row_to_broadcast_rule(row) if row else None
+    finally:
+        conn.close()
+
+
+def delete_broadcast_rule(user_id: int, rule_id: int) -> bool:
+    conn = _conn()
+    try:
+        cur = conn.execute("DELETE FROM telegram_broadcast_rules WHERE id = ? AND user_id = ?", (rule_id, user_id))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_broadcast_rule(user_id: int, rule_id: int) -> dict:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM telegram_broadcast_rules WHERE id = ? AND user_id = ?", (rule_id, user_id)).fetchone()
+        return _row_to_broadcast_rule(row) if row else None
     finally:
         conn.close()
 

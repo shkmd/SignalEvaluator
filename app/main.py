@@ -393,7 +393,7 @@ def evaluate(req: EvaluateRequest, user_id: int = Depends(current_user_id)):
     if signal_id:
         saved = db.get_signal(user_id, signal_id)
         evaluation["lot_size"] = saved.get("lot_size") if saved else None
-        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
+        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id, source="manual")
         alerts.maybe_alert_signal(user_id, signal, evaluation, signal_id)
 
     return evaluation
@@ -1191,30 +1191,59 @@ def dhan_status(user_id: int = Depends(current_user_id)):
     return dhan_broker.get_status(user_id)
 
 
-class TelegramBroadcastSettingsRequest(BaseModel):
+class TelegramBroadcastRuleRequest(BaseModel):
     enabled: bool
     target_chat_id: Optional[int] = None
     target_chat_title: Optional[str] = None
     min_score: float = 60
     fo_only: bool = False
+    sources: Optional[List[str]] = None  # None/empty = every source; see db.BROADCAST_SOURCES
 
 
-@app.get("/api/telegram/broadcast-settings")
-def get_telegram_broadcast_settings(user_id: int = Depends(current_user_id)):
-    return db.get_telegram_broadcast_settings(user_id)
+def _validate_broadcast_rule(req: "TelegramBroadcastRuleRequest"):
+    if req.sources:
+        bad = set(req.sources) - db.BROADCAST_SOURCES
+        if bad:
+            raise HTTPException(status_code=400, detail=f"Unknown source(s): {', '.join(sorted(bad))}")
+    if not (0 <= req.min_score <= 100):
+        raise HTTPException(status_code=400, detail="min_score must be between 0 and 100")
 
 
-@app.post("/api/telegram/broadcast-settings")
-def save_telegram_broadcast_settings(req: TelegramBroadcastSettingsRequest, user_id: int = Depends(current_user_id)):
-    return db.save_telegram_broadcast_settings(
-        user_id, req.enabled, req.target_chat_id, req.target_chat_title, req.min_score, req.fo_only
+@app.get("/api/telegram/broadcast-rules")
+def list_telegram_broadcast_rules(user_id: int = Depends(current_user_id)):
+    return db.list_broadcast_rules(user_id)
+
+
+@app.post("/api/telegram/broadcast-rules")
+def create_telegram_broadcast_rule(req: TelegramBroadcastRuleRequest, user_id: int = Depends(current_user_id)):
+    _validate_broadcast_rule(req)
+    return db.create_broadcast_rule(
+        user_id, req.enabled, req.target_chat_id, req.target_chat_title, req.min_score, req.fo_only, req.sources
     )
 
 
-@app.post("/api/telegram/broadcast-test")
-async def send_broadcast_test(user_id: int = Depends(current_user_id)):
+@app.post("/api/telegram/broadcast-rules/{rule_id}")
+def update_telegram_broadcast_rule(rule_id: int, req: TelegramBroadcastRuleRequest, user_id: int = Depends(current_user_id)):
+    _validate_broadcast_rule(req)
+    updated = db.update_broadcast_rule(
+        user_id, rule_id, req.enabled, req.target_chat_id, req.target_chat_title, req.min_score, req.fo_only, req.sources
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Broadcast rule not found.")
+    return updated
+
+
+@app.delete("/api/telegram/broadcast-rules/{rule_id}")
+def delete_telegram_broadcast_rule(rule_id: int, user_id: int = Depends(current_user_id)):
+    if not db.delete_broadcast_rule(user_id, rule_id):
+        raise HTTPException(status_code=404, detail="Broadcast rule not found.")
+    return {"deleted": True}
+
+
+@app.post("/api/telegram/broadcast-rules/{rule_id}/test")
+async def send_broadcast_test(rule_id: int, user_id: int = Depends(current_user_id)):
     try:
-        result = await telegram_broadcast.send_test_message(user_id)
+        result = await telegram_broadcast.send_test_message(user_id, rule_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not result.get("sent"):

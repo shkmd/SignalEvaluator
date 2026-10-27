@@ -171,7 +171,7 @@ def _evaluate_and_store(user_id: int, parsed: dict, chat_id: int, message_id: in
         if trade_result and trade_result.get("placed"):
             print(f"[trading] user {user_id}: paper order #{trade_result['order_id']} placed for signal #{signal_id}")
         _maybe_paper_trade(user_id, signal_id, signal, evaluation, channel_title)
-        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id)
+        telegram_broadcast.maybe_broadcast(user_id, signal, evaluation, signal_id, source="telegram")
         alerts.maybe_alert_signal(user_id, signal, evaluation, signal_id)
 
 
