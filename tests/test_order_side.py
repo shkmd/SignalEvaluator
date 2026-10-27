@@ -38,3 +38,11 @@ def test_equity_signal_with_no_action_falls_back_to_direction():
 def test_missing_action_key_also_falls_back():
     signal = {"instrument": "EQ"}
     assert order_side(signal, {"direction": "bullish"}) == "buy"
+
+
+def test_missing_direction_key_never_raises():
+    # Real bug: telegram_broadcast.send_test_message()'s dummy signal/evaluation had neither
+    # "action" nor "direction" set, so order_side() raised KeyError('direction') and the
+    # "Send test message" button failed with "Error: 'direction'" for every user. Falls back to
+    # "buy" rather than crashing, same as any other signal missing both fields.
+    assert order_side({"instrument": "EQ"}, {}) == "buy"

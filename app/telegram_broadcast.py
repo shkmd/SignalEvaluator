@@ -153,11 +153,11 @@ async def send_test_message(user_id: int, rule_id: int) -> dict:
         return {"sent": False, "reason": "No target channel is set on this broadcast -- configure it first."}
 
     test_signal = {
-        "resolved_symbol": "TEST", "instrument": "EQ",
+        "resolved_symbol": "TEST", "instrument": "EQ", "action": "buy",
         "entry_low": 100, "entry_high": 100, "sl": 95, "targets": [110],
         "signal_type": "positional",
     }
-    test_evaluation = {"score": 100, "verdict": "Test message -- please ignore"}
+    test_evaluation = {"score": 100, "verdict": "Test message -- please ignore", "direction": "bullish"}
     text = "\U0001F9EA TEST MESSAGE -- verifying broadcast setup, please ignore\n\n" + format_signal_message(
         test_signal, test_evaluation
     )

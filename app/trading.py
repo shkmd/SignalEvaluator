@@ -186,7 +186,7 @@ def order_side(signal: dict, evaluation: dict) -> str:
     action = signal.get("action")
     if action in ("buy", "sell"):
         return action
-    return "sell" if evaluation["direction"] == "bearish" else "buy"
+    return "sell" if evaluation.get("direction") == "bearish" else "buy"
 
 
 def auto_trade_check(user_id: int, signal_id: int, signal: dict, evaluation: dict) -> dict | None:

@@ -41,6 +41,21 @@ def test_explicit_sell_action_is_respected_over_a_bullish_direction():
     assert "Sell Range" in message
 
 
+def test_send_test_message_payload_shape_does_not_crash_order_side():
+    # Real bug: the "Send test message" button's dummy signal/evaluation had neither "action"
+    # nor "direction" set, so format_signal_message() -> trading.order_side() raised
+    # KeyError('direction') and the button failed with "Error: 'direction'" for every user.
+    # Mirrors telegram_broadcast.send_test_message()'s actual test_signal/test_evaluation.
+    test_signal = {
+        "resolved_symbol": "TEST", "instrument": "EQ", "action": "buy",
+        "entry_low": 100, "entry_high": 100, "sl": 95, "targets": [110],
+        "signal_type": "positional",
+    }
+    test_evaluation = {"score": 100, "verdict": "Test message -- please ignore", "direction": "bullish"}
+    message = format_signal_message(test_signal, test_evaluation)
+    assert "Buy Range - 100" in message
+
+
 def test_pe_option_signal_still_says_buy_range_despite_bearish_direction():
     # PE direction is always "bearish" by scoring.py's own definition, but this app always
     # *buys* the put -- must not be mislabeled "Sell Range" just because direction is bearish.
