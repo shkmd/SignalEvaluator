@@ -8,6 +8,8 @@ Live mode requires a connected broker account AND a broker-specific order-placem
 than silently doing nothing -- see place_live_order() below.
 """
 import math
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import yfinance as yf
@@ -16,20 +18,62 @@ from app import alerts, db, graduation, options as options_mod, technicals
 
 MAX_WORKERS_LIVE_PRICE = 8
 
+# Positions polls this every 10s (see POSITIONS_POLL_MS in app.js) and the background position
+# monitor polls it every 60s -- without a cache, every one of those cycles re-fetches a fresh
+# price per open position even when two polls land seconds apart, or two orders share the same
+# underlying/strike. A short TTL (well under the UI's own poll interval) still dedups the
+# common overlap case -- concurrent lookups for the same contract, and the monitor loop and a
+# page load landing close together -- without ever showing a price more than a few seconds stale.
+PRICE_CACHE_TTL_SECONDS = 8
+_price_cache: dict = {}  # (resolved_symbol, instrument, strike) -> (monotonic_ts, price_info)
+_price_cache_lock = threading.Lock()
+
 
 def get_live_price(resolved_symbol: str, instrument: str, strike: float, user_id: int = None) -> dict:
-    """Best-effort current price for either an equity or an option leg.
+    """Best-effort current price for either an equity or an option leg, cached for
+    PRICE_CACHE_TTL_SECONDS. The price itself is market data, not user-specific, so the cache
+    key deliberately excludes user_id -- two users asking about the same contract within the
+    TTL window share one fetch. Failures are cached too (for the same short window) so a
+    currently-unavailable price doesn't get re-attempted on every single poll."""
+    cache_key = (resolved_symbol, instrument, strike)
+    with _price_cache_lock:
+        cached = _price_cache.get(cache_key)
+        if cached and (time.monotonic() - cached[0]) < PRICE_CACHE_TTL_SECONDS:
+            return cached[1]
+
+    result = _fetch_live_price(resolved_symbol, instrument, strike, user_id)
+
+    with _price_cache_lock:
+        _price_cache[cache_key] = (time.monotonic(), result)
+    return result
+
+
+def _fetch_live_price(resolved_symbol: str, instrument: str, strike: float, user_id: int = None) -> dict:
+    """Does the actual lookup -- see get_live_price() for the cache wrapping around this.
 
     For an option leg, tries the user's own connected broker FIRST when a user_id is given --
     NSE's public option-chain endpoint is blocked outright (HTTP 403 on their own homepage, via
     Akamai bot protection) from most cloud/datacenter IPs, so on a server deployment like this
     one the NSE path is a fallback of last resort, not the primary source, whenever a broker
-    session is actually available."""
+    session is actually available. When NO broker is connected at all, that NSE fallback is
+    skipped entirely rather than attempted on every single poll: it almost always just burns a
+    slow (up to ~12s, two sequential 6s-timeout requests) round trip against a site that blocks
+    this server's IP outright -- see app/options.py. Connect a broker for live option prices.
+    """
     if instrument in ("CE", "PE") and strike:
+        broker = None
         if user_id is not None:
-            broker_result = _broker_option_ltp(user_id, resolved_symbol, strike, instrument)
+            broker_result, broker = _broker_option_ltp(user_id, resolved_symbol, strike, instrument)
             if broker_result is not None:
                 return broker_result
+
+        if broker is None:
+            return {
+                "available": False,
+                "reason": "No broker connected -- NSE's option-chain endpoint blocks requests from "
+                "this server, so there's no way to get a live option price without one. Connect a "
+                "broker from Broker Setup for live prices on this position.",
+            }
 
         snap = options_mod.fetch_option_chain_snapshot(resolved_symbol, strike, instrument)
         if snap.get("available") and snap.get("ltp"):
@@ -44,23 +88,29 @@ def get_live_price(resolved_symbol: str, instrument: str, strike: float, user_id
         return {"available": False, "reason": f"Price fetch failed: {e}"}
 
 
-def _broker_option_ltp(user_id: int, resolved_symbol: str, strike: float, instrument: str) -> dict | None:
-    """Returns None (not a failure dict) when no broker is connected or the broker lookup
-    itself errors, so the caller falls through to the NSE path -- only an explicit, successful
-    broker answer short-circuits it."""
-    try:
-        from app.brokers import get_connected_adapter
+def _broker_option_ltp(user_id: int, resolved_symbol: str, strike: float, instrument: str):
+    """Returns (price_info_or_None, broker_adapter_or_None). The second value is what lets the
+    caller tell "no broker connected at all" (broker is None -- skip the NSE fallback) apart
+    from "broker connected but this specific lookup didn't return a usable price" (broker is
+    set, price_info is None -- NSE is still worth trying). price_info is None, not a failure
+    dict, whenever the broker itself didn't give an answer, so the caller falls through."""
+    from app.brokers import get_connected_adapter
 
+    try:
         broker = get_connected_adapter(user_id)
-        if not broker or not hasattr(broker, "find_option_by_strike"):
-            return None
+    except Exception:
+        broker = None
+    if not broker or not hasattr(broker, "find_option_by_strike"):
+        return None, broker
+
+    try:
         name = resolved_symbol.split(".")[0]
         result = broker.find_option_by_strike(user_id, name, strike, instrument)
         if result.get("available") and result.get("ltp"):
-            return {"available": True, "price": float(result["ltp"]), "source": result.get("source", "broker")}
-        return None
+            return {"available": True, "price": float(result["ltp"]), "source": result.get("source", "broker")}, broker
     except Exception:
-        return None
+        pass
+    return None, broker
 
 
 def enrich_open_positions(orders: list) -> list:
