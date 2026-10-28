@@ -49,14 +49,16 @@ def format_signal_message(signal: dict, evaluation: dict) -> str:
     entry_high = signal.get("entry_high")
     sl = signal.get("sl")
     targets = signal.get("targets") or []
-    signal_type = (signal.get("signal_type") or "positional").capitalize()
+    signal_type = (signal.get("signal_type") or "positional").upper()
     # A signal's stored "direction" is a market-thesis label, not the order side -- every PE is
     # "bearish" by definition even though buying a put is this app's actual strategy. Using the
-    # wrong one here previously labeled every genuine sell/short signal "Buy Range", which is
+    # wrong one here previously labeled every genuine sell/short signal as a buy, which is
     # actively misleading, not just a display quirk.
-    range_label = "Buy Range" if trading.order_side(signal, evaluation) == "buy" else "Sell Range"
+    is_buy = trading.order_side(signal, evaluation) == "buy"
+    action_word = "Buy" if is_buy else "Sell"
+    icon = "\U0001F4C8" if is_buy else "\U0001F4C9"  # 📈 / 📉, matching the call's actual direction
 
-    lines = []
+    contract = symbol
     if instrument in ("CE", "PE") and signal.get("strike"):
         expiry_label = ""
         expiry_iso = (evaluation.get("options") or {}).get("expiry")
@@ -66,23 +68,27 @@ def format_signal_message(signal: dict, evaluation: dict) -> str:
                 expiry_label = f" {MONTH_ABBR[dt.month - 1]}"
             except Exception:
                 pass
-        lines.append(f"{symbol} {_fmt_num(signal['strike'])}{instrument}{expiry_label} Series")
-    else:
-        lines.append(f"{symbol} Equity")
+        contract = f"{symbol} {_fmt_num(signal['strike'])}{instrument}{expiry_label}"
 
-    lines.append("")
     if entry_low == entry_high:
-        lines.append(f"{range_label} - {_fmt_num(entry_high)}")
+        entry_phrase = f"Around {_fmt_num(entry_high)}"
     else:
-        lines.append(f"{range_label} - {_fmt_num(entry_high)}/{_fmt_num(entry_low)}")
-    lines.append("")
-    lines.append(f"SL {_fmt_num(sl)}")
-    lines.append("")
-    lines.append(f"Targets - {'/'.join(_fmt_num(t) for t in targets)}")
-    lines.append("")
-    lines.append(signal_type)
-    lines.append("")
-    lines.append(f"Score: {evaluation.get('score')} · {evaluation.get('verdict', '')}")
+        entry_phrase = f"Around {_fmt_num(entry_low)}-{_fmt_num(entry_high)} Range"
+
+    # Deliberately no "add more at X" / averaging-down line here, even when the source signal
+    # carries one (signal.get("add_more_at") -- see parser.py) -- this app doesn't endorse
+    # averaging into a losing position, so it's never surfaced in the broadcast.
+    lines = [
+        f"{icon} {signal_type}",
+        "",
+        f"{icon} {action_word} {contract} {entry_phrase}",
+        "",
+        f"{icon} SL {_fmt_num(sl)}",
+        "",
+        f"{icon} Target {'/'.join(_fmt_num(t) for t in targets)}{'+' if signal.get('targets_open_ended') else ''}",
+        "",
+        f"Score: {evaluation.get('score')} · {evaluation.get('verdict', '')}",
+    ]
 
     return "\n".join(lines)
 
